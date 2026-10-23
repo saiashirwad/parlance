@@ -193,13 +193,6 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
 const types = (module: CalcModule) => {
   const show = (type: Type | null) => (type === null ? "unknown" : new TypeStore().show(type));
   return ts`${
-    module.imports.flatMap((group) =>
-      group.bindings.map(({ exported, binding }) => ts`export declare const ${exported}: ${
-        show(binding.type ?? null)
-      };
-`)
-    )
-  }${
     module.declarations.flatMap((declaration) =>
       declaration.kind === "let"
         ? [ts`export declare const ${source(declaration.name)}: ${show(declaration.binding.type ?? null)};

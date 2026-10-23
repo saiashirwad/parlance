@@ -106,10 +106,35 @@ export class ModuleGraph {
   analyze(uri: string, options: AnalyzeOptions = {}): Analysis {
     const id = documentUri(uri);
     const existing = this.#nodes.get(id);
-    const source = options.source ?? existing?.source ?? this.#read(id);
+    const source = options.source ?? this.#read(id);
     if (source === null) throw new Error(`Cannot read ${id}`);
+    for (const stale of this.#staleDependencies(id)) this.#invalidate(stale);
     if (existing && (existing.source !== source || options.parsed !== undefined)) this.#invalidate(id);
     return this.#visit(id, source, [], options.incremental ?? null, options.parsed).analysis;
+  }
+
+  /** Dependency URIs whose backing source no longer matches the cached node. */
+  #staleDependencies(uri: string, seen = new Set<string>()): string[] {
+    const node = this.#nodes.get(uri);
+    if (!node || seen.has(uri)) return [];
+    seen.add(uri);
+    const stale: string[] = [];
+    for (const edge of node.imports) {
+      if (edge.uri === null) continue;
+      const source = this.#read(edge.uri);
+      if (edge.node === null) {
+        // A missing import that now exists, or a cycle edge. Rebuild the
+        // dependent so both cases get a fresh answer.
+        if (source !== null) stale.push(uri);
+        continue;
+      }
+      if (source === null || edge.node.source !== source) {
+        stale.push(edge.uri);
+        continue;
+      }
+      stale.push(...this.#staleDependencies(edge.uri, seen));
+    }
+    return stale;
   }
 
   node(uri: string): ModuleNode | undefined {
@@ -139,6 +164,9 @@ export class ModuleGraph {
   ): ModuleNode {
     const cached = this.#nodes.get(uri);
     if (cached && cached.source === source && parsed === undefined) return cached;
+    // A dependency can change while another entry is being visited. Drop the
+    // old node and every dependent before rebuilding it.
+    if (cached) this.#invalidate(uri);
 
     const language = languageFor(this.#languages, uri);
     if (!language) throw new Error(`No parlance language is registered for ${uri}`);

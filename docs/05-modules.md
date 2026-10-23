@@ -98,8 +98,11 @@ carries the import `span`, so a language can report ambiguity at the specifier.
 ### Order and caching
 
 The graph is a depth-first post-order walk. A node is recorded after its dependencies, so
-`order()` lists `lib.calc` before `imports.calc`. Analysis is cached by URI and source text. When an
-entry's source changes, the graph drops that node and every document that transitively imports it.
+`order()` lists `lib.calc` before `imports.calc`. On every `analyze`, the graph re-reads the entry
+and walks its reachable dependencies, comparing each cached source text. A changed dependency is
+invalidated together with every transitive dependent before the walk rebuilds them. A missing
+dependency that appears later is re-analyzed. This matters for the persistent graphs in the content
+mapper and LSP, not just the one-shot CLI graph.
 
 ### Cycles
 
@@ -176,7 +179,7 @@ Warnings are routed too. Info diagnostics stay local.
   recursive guest scan lists imported files in `watchedFiles`. Schema's TypeScript surface includes
   imported declarations; names from another file are emitted without source mappings, because a
   mapping must stay inside the transformed document.
-- **LSP.** One graph serves every language. Definition reads a use in file A, finds the imported alias with `uri` B, and converts the declaration span against B's open text or the graph cache. References walk every analyzed node and match definitions by `(uri, span)`, so aliases in other files are included. Rename uses the same match to return edits for every affected URI.
+- **LSP.** One graph serves every language. Definition reads a use in file A, finds the imported alias with `uri` B, and converts the declaration span against B's open text or the graph cache. References walk every analyzed node and match definitions by `(uri, span)`, so aliases in other files are included. Rename uses the same match to return edits for every affected URI. An edit to one open document refreshes every open document whose graph node was invalidated, so the next request never converts an old span against new text.
 
 ## Two-file example
 
@@ -188,7 +191,12 @@ examples/calc/imports.calc        use "./lib.calc"; let total = base * 2;
 ```
 
 `catalog.schema` emits one SQL artifact containing `Catalog`, `User`, and `Post`. `imports.calc`
-imports `base` and `limit` at runtime.
+imports `base` and `limit` at runtime. Calc's TypeScript surface exports only values declared in the
+file; imported values are usable inside the file and are re-imported by the runtime module, but the
+file does not re-export them.
+
+Two dependencies exporting the same name from different declarations are a diagnostic at the
+second import specifier. The same declaration reached through a diamond is allowed.
 
 ## Not done
 
@@ -200,5 +208,5 @@ imports `base` and `limit` at runtime.
   re-exported until types are translated between stores.
 - Machine recognizes and analyzes imports but its checker does not merge imported events or
   states. Schema and calc are the resolved cross-file cases.
-- A changed dependency invalidates dependents lazily. Open documents in the LSP refresh on their
-  next edit, not immediately when another open file changes.
+- A dependency changed on disk is picked up on the next `analyze`. Open LSP documents are refreshed
+  on the edit that invalidates them; a closed dependent is re-analyzed when it is reopened.

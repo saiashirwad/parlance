@@ -232,10 +232,23 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   const importedTypes = new Map<string, SchemaType>();
   const importedEnums: EnumIR[] = [];
   const importedModels: ModelIR[] = [];
+  const importedIdentity = new Map<string, string>();
 
   for (const dependency of cx.dependencies.all) {
     const module = dependency.module as SchemaModule | null;
     if (!module) continue;
+    for (const [name, binding] of dependency.exports) {
+      const identity = `${binding.uri ?? dependency.uri}:${binding.span.start}:${binding.span.end}`;
+      const previous = importedIdentity.get(name);
+      if (previous !== undefined && previous !== identity) {
+        cx.error(
+          `Import ${JSON.stringify(dependency.specifier)} also exports ${JSON.stringify(name)} from a different declaration`,
+          dependency.span,
+        );
+      } else if (previous === undefined) {
+        importedIdentity.set(name, identity);
+      }
+    }
     for (const enumeration of module.enums) {
       if (!importedTypes.has(enumeration.name.text)) {
         const binding = dependency.exports.get(enumeration.name.text) ?? enumeration.binding;
@@ -252,7 +265,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
           ...enumeration,
           members: enumeration.members.map((member) => ({
             ...member,
-            binding: cx.alias(member.binding, dependency.uri),
+            binding: cx.alias(member.binding, member.binding.uri ?? dependency.uri),
           })),
           binding,
         });
@@ -268,7 +281,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         );
         const fields = model.fields.map((field) => ({
           ...field,
-          binding: cx.alias(field.binding, dependency.uri),
+          binding: cx.alias(field.binding, field.binding.uri ?? dependency.uri),
         }));
         const primary = model.primary === null
           ? null

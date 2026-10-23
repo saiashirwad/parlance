@@ -71,6 +71,48 @@ test("dependency errors keep their origin and route to the import site", () => {
   assert.equal(analysis.source.slice(routed.span.start, routed.span.end), "./broken.schema");
 });
 
+test("a changed dependency invalidates the entry and its dependents", () => {
+  const files: Record<string, string> = {
+    "memory://dir/base.schema": "schema Base\nmodel Base {\n  id: Int @primary\n}\n",
+    "memory://dir/main.schema": "schema Main\nimport \"./base.schema\";\nmodel Main {\n  id: Int @primary\n  owner: Base\n}\n",
+    "memory://dir/other.schema": "schema Other\nimport \"./base.schema\";\nmodel Other {\n  id: Int @primary\n  owner: Base\n}\n",
+  };
+  const graph = new ModuleGraph({ languages: [schema], read: (uri) => files[uri] ?? null });
+  const first = graph.analyze("memory://dir/main.schema");
+  assert.deepEqual(first.diagnostics, []);
+  assert.deepEqual(
+    (first.ir as SchemaModule).models.find((model) => model.name.text === "Base")!.fields.map((field) => field.name.text),
+    ["id"],
+  );
+
+  files["memory://dir/base.schema"] = "schema Base\nmodel Base {\n  id: Int @primary\n  name: String\n}\n";
+  const second = graph.analyze("memory://dir/main.schema");
+  assert.notEqual(second, first);
+  assert.deepEqual(second.diagnostics, []);
+  assert.deepEqual(
+    (second.ir as SchemaModule).models.find((model) => model.name.text === "Base")!.fields.map((field) => field.name.text),
+    ["id", "name"],
+  );
+
+  files["memory://dir/base.schema"] = "schema Base\nmodel Base {\n  id: Int @primary\n  label: String\n}\n";
+  graph.analyze("memory://dir/other.schema");
+  assert.equal(graph.node("memory://dir/main.schema"), undefined, "another importer's rebuild left a stale dependent cached");
+});
+
+test("a missing dependency that appears later is re-analyzed", () => {
+  const files: Record<string, string> = {
+    "memory://dir/main.schema": "schema Main\nimport \"./later.schema\";\nmodel Main {\n  id: Int @primary\n}\n",
+  };
+  const graph = new ModuleGraph({ languages: [schema], read: (uri) => files[uri] ?? null });
+  const first = graph.analyze("memory://dir/main.schema");
+  assert.match(first.diagnostics.map((entry) => entry.message).join("\n"), /Cannot resolve import/);
+
+  files["memory://dir/later.schema"] = "schema Later\nmodel Later {\n  id: Int @primary\n}\n";
+  const second = graph.analyze("memory://dir/main.schema");
+  assert.deepEqual(second.diagnostics, []);
+  assert.ok((second.ir as SchemaModule).models.some((model) => model.name.text === "Later"));
+});
+
 test("a two-file schema imports a model and emits one SQL artifact", () => {
   const entry = new URL("../examples/schema/catalog.schema", import.meta.url).pathname;
   const graph = new ModuleGraph({ languages: [schema] });
@@ -98,11 +140,46 @@ test("calc resolves an imported value and emits a real module import", () => {
   assert.deepEqual(analysis.diagnostics, []);
   const module = analysis.ir as CalcModule;
   assert.equal(module.imports[0]!.specifier, "./lib.calc");
-  assert.match(calc.runtime!(module), /import \{ base as _v0, limit as _v1 \} from "\.\/lib\.calc";/);
+  const runtime = calc.runtime!(module);
+  assert.match(runtime, /import \{ base as _v0, limit as _v1 \} from "\.\/lib\.calc";/);
+  const surface = calc.typescript!(module).text;
+  assert.match(surface, /export declare const total/);
+  assert.doesNotMatch(surface, /export declare const base/, "the runtime does not re-export imported values");
   assert.deepEqual(graph.order(), [
     new URL("../examples/calc/lib.calc", import.meta.url).href,
     new URL("../examples/calc/imports.calc", import.meta.url).href,
   ]);
+});
+
+test("transitive imports keep the original defining URI", () => {
+  const files = {
+    "memory://dir/c.schema": "schema C\nenum Role { Admin }\nmodel User {\n  id: Int @primary @auto\n  role: Role\n}\n",
+    "memory://dir/b.schema": "schema B\nimport \"./c.schema\";\nmodel B {\n  id: Int @primary @auto\n  owner: User\n}\n",
+    "memory://dir/a.schema": "schema A\nimport \"./b.schema\";\nquery admins(): User[] =\n  User |> where role == Admin |> all;\n",
+  };
+  const analysis = memory(files).analyze("memory://dir/a.schema");
+  assert.deepEqual(analysis.diagnostics, []);
+  const source = files["memory://dir/a.schema"];
+  const fieldAt = source.indexOf("where role") + "where ".length;
+  const field = definitionAt(analysis.facts, fieldAt);
+  assert.equal(field?.uri, "memory://dir/c.schema");
+  assert.equal(files["memory://dir/c.schema"].slice(field.span.start, field.span.end), "role");
+  const memberAt = source.indexOf("Admin");
+  const member = definitionAt(analysis.facts, memberAt);
+  assert.equal(member?.uri, "memory://dir/c.schema");
+  assert.equal(files["memory://dir/c.schema"].slice(member.span.start, member.span.end), "Admin");
+});
+
+test("conflicting imported declarations report at the second specifier", () => {
+  const files = {
+    "memory://dir/one.schema": "schema One\nmodel User {\n  id: Int @primary\n}\n",
+    "memory://dir/two.schema": "schema Two\nmodel User {\n  id: Int @primary\n  name: String\n}\n",
+    "memory://dir/main.schema": "schema Main\nimport \"./one.schema\";\nimport \"./two.schema\";\n",
+  };
+  const analysis = memory(files).analyze("memory://dir/main.schema");
+  const conflict = analysis.diagnostics.find((entry) => /also exports "User" from a different declaration/.test(entry.message));
+  assert.ok(conflict, analysis.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(analysis.source.slice(conflict.span.start, conflict.span.end), "./two.schema");
 });
 
 test("two imports exporting the same name report at the second specifier", () => {
