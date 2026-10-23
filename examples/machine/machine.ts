@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { type Binding, type Checker } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage } from "../../src/language.ts";
+import { defineLanguage, importSpecifier } from "../../src/language.ts";
 import { runtimeModule } from "../../src/runtime/index.ts";
 import type { Span, Text } from "../../src/source.ts";
 import { source, synth, ts } from "../../src/ts/index.ts";
@@ -75,6 +75,7 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
   const events: EventIR[] = [];
   const eventMap = new Map<string, EventIR>();
   for (const event of file.events) {
+    if (event.kind === "import") continue;
     if (names.has(event.name.text)) {
       cx.error(`Duplicate name ${JSON.stringify(event.name.text)}`, event.name);
       continue;
@@ -289,6 +290,9 @@ export const machine = defineLanguage<File, MachineModule, Checked>({
   extensions: [".machine"],
   grammar,
   check,
+  imports: (file) =>
+    file.events.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
+  exports: (module) => [...module.events.map((event) => event.binding), ...module.states.map((state) => state.binding)],
   typescript: types,
   runtime,
   show: display,

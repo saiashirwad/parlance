@@ -257,7 +257,7 @@ test("calc types include helpers, tagged node interfaces, and rule aliases", () 
   assert.match(calcTypes.text, /export type File = FileFileNode;/);
   assert.match(calcTypes.text, /export interface DeclLetNode \{/);
   assert.match(calcTypes.text, /export interface DeclShowNode \{/);
-  assert.match(calcTypes.text, /export type Decl =\n {2}\| DeclLetNode\n {2}\| DeclShowNode;/);
+  assert.match(calcTypes.text, /export type Decl =\n {2}\| Import\n {2}\| DeclLetNode\n {2}\| DeclShowNode;/);
   assert.match(calcTypes.text, /export interface ExprBinaryNode \{/);
   assert.match(calcTypes.text, /export interface ExprPrefixNode \{/);
   assert.match(calcTypes.text, /export interface ExprPostfixNode \{/);

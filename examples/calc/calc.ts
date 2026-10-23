@@ -3,7 +3,7 @@ import { type Binding, type Checker } from "../../src/check/index.ts";
 import { type Diagnostic, error } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage } from "../../src/language.ts";
+import { defineLanguage, importSpecifier } from "../../src/language.ts";
 import type { Span, Text } from "../../src/source.ts";
 import { source, ts } from "../../src/ts/index.ts";
 import { TypeStore, type Type } from "../../src/types/index.ts";
@@ -32,8 +32,14 @@ type CalcDecl =
   | { readonly kind: "let"; readonly name: Text; readonly binding: Binding<Type>; readonly value: CalcExpr }
   | { readonly kind: "show"; readonly value: CalcExpr };
 
+type CalcImport = {
+  readonly specifier: string;
+  readonly bindings: readonly { readonly exported: string; readonly binding: Binding<Type> }[];
+};
+
 export type CalcModule = {
   readonly declarations: readonly CalcDecl[];
+  readonly imports: readonly CalcImport[];
   readonly result: CalcExpr | null;
   readonly resultType: Type | null;
 };
@@ -128,10 +134,22 @@ const checkExpr = (expr: Expr, cx: Checker<Type>, store: TypeStore): { ir: CalcE
 const check = (file: File, cx: Checker<Type>): CalcModule => {
   const store = new TypeStore();
   const declarations: CalcDecl[] = [];
+  const imports: CalcImport[] = [];
   let result: CalcExpr | null = null;
   let resultType: Type | null = null;
   const names = new Set<string>();
+  for (const dependency of cx.dependencies.all) {
+    const bindings: { exported: string; binding: Binding<Type> }[] = [];
+    for (const [name, exported] of dependency.exports) {
+      const binding = cx.imported(name);
+      if (!binding) continue;
+      names.add(name);
+      bindings.push({ exported: name, binding });
+    }
+    if (bindings.length > 0) imports.push({ specifier: dependency.specifier, bindings });
+  }
   for (const declaration of file.declarations) {
+    if (declaration.kind === "import") continue;
     if (declaration.kind === "let") {
       const name = declaration.name;
       if (reserved.has(name.text)) {
@@ -155,12 +173,19 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       resultType = value.type;
     }
   }
-  return { declarations, result, resultType };
+  return { declarations, imports, result, resultType };
 };
 
 const types = (module: CalcModule) => {
   const show = (type: Type | null) => (type === null ? "unknown" : new TypeStore().show(type));
   return ts`${
+    module.imports.flatMap((group) =>
+      group.bindings.map(({ exported, binding }) => ts`export declare const ${exported}: ${
+        show(binding.type ?? null)
+      };
+`)
+    )
+  }${
     module.declarations.flatMap((declaration) =>
       declaration.kind === "let"
         ? [ts`export declare const ${source(declaration.name)}: ${show(declaration.binding.type ?? null)};
@@ -203,6 +228,13 @@ const runtime = (module: CalcModule): string => {
         return `(${value.operator}${expr(value.operand)})`;
     }
   };
+  const importLines = module.imports.map((group) => {
+    const pairs = group.bindings.map(({ exported, binding }) => {
+      const local = temp(binding);
+      return exported === local ? local : `${exported} as ${local}`;
+    });
+    return `import { ${pairs.join(", ")} } from ${JSON.stringify(group.specifier)};`;
+  });
   const exported: string[] = [];
   let last: string | null = null;
   let shows = 0;
@@ -221,7 +253,7 @@ const runtime = (module: CalcModule): string => {
   }
   if (exported.length) lines.push(`export { ${exported.join(", ")} };`);
   if (last) lines.push(`export default ${last};`);
-  return lines.join("\n") + "\n";
+  return [...importLines, ...lines].join("\n") + "\n";
 };
 
 export const calc = defineLanguage<File, CalcModule, Type>({
@@ -229,6 +261,10 @@ export const calc = defineLanguage<File, CalcModule, Type>({
   extensions: [".calc"],
   grammar,
   check,
+  imports: (file) =>
+    file.declarations.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
+  exports: (module) =>
+    module.declarations.flatMap((declaration) => declaration.kind === "let" ? [declaration.binding] : []),
   typescript: types,
   runtime,
   show: (type) => new TypeStore().show(type),

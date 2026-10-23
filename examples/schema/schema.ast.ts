@@ -14,12 +14,21 @@ export interface FileSchemaNode {
 export type File = FileSchemaNode;
 
 export type Decl =
+  | Import
   | Enum
   | Model
   | Query
   | Insert
   | Update
   | Delete;
+
+export interface ImportImportNode {
+  readonly kind: "import";
+  readonly specifier: Text;
+  readonly span: Span;
+}
+
+export type Import = ImportImportNode;
 
 export interface EnumEnumNode {
   readonly kind: "enum";

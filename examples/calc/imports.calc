@@ -1,0 +1,4 @@
+use "./lib.calc";
+
+let total = base * 2;
+show total;

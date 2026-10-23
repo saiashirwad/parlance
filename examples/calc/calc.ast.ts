@@ -26,8 +26,17 @@ export interface DeclShowNode {
 }
 
 export type Decl =
+  | Import
   | DeclLetNode
   | DeclShowNode;
+
+export interface ImportImportNode {
+  readonly kind: "import";
+  readonly specifier: Text;
+  readonly span: Span;
+}
+
+export type Import = ImportImportNode;
 
 export interface ExprNumberNode {
   readonly kind: "number";

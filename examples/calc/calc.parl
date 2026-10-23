@@ -6,6 +6,7 @@ skip /\/\/[^\n]*/
 word /[A-Za-z_][A-Za-z0-9_]*/
 
 token Number /\d+(?:\.\d+)?/
+token String /"([^"\\\n]|\\.)*"/
 
 root File
 
@@ -14,8 +15,13 @@ rule File = {
 };
 
 rule Decl = {
+  | Import
   | @let "let" ~ name:Name "=" ~ value:Expr ";"
   | @show "show" ~ value:Expr ";"
+};
+
+rule Import = {
+  @import "use" specifier:$String ";"
 };
 
 rule Expr = precedence {

@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
 import { render, site } from "../diagnostic.ts";
-import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
+import { extensionMap, type AnyLanguage } from "../language.ts";
+import { ModuleGraph } from "../modules.ts";
 
 const describe = (diagnostic: Parameters<typeof render>[0], url: string, source: string): string => {
   const location = site(diagnostic, url);
@@ -10,9 +11,10 @@ const describe = (diagnostic: Parameters<typeof render>[0], url: string, source:
   return location.uri === url ? `${fileURLToPath(url)}: ${rendered}` : `${location.uri}: ${rendered}`;
 };
 
-/** Installs Node module hooks for every guest extension. Guest imports resolve recursively. */
+/** Installs Node module hooks for every guest extension. Guest imports resolve through one graph. */
 export const registerLanguages = (languages: readonly AnyLanguage[]): void => {
   const registry = extensionMap(languages);
+  const graph = new ModuleGraph({ languages });
   registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith("file:")) return nextLoad(url, context);
@@ -20,7 +22,7 @@ export const registerLanguages = (languages: readonly AnyLanguage[]): void => {
       const language = [...registry].find(([extension]) => path.endsWith(extension))?.[1];
       if (!language) return nextLoad(url, context);
       const source = readFileSync(path, "utf8");
-      const analysis = analyze(language, source, url);
+      const analysis = graph.analyze(url, { source });
       if (analysis.diagnostics.length > 0 || analysis.ir === null) {
         const errors = analysis.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
         const messages = (errors.length ? errors : analysis.diagnostics).map((diagnostic) =>

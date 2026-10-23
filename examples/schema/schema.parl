@@ -14,12 +14,17 @@ rule File = {
 };
 
 rule Decl = {
+  | Import
   | Enum
   | Model
   | Query
   | Insert
   | Update
   | Delete
+};
+
+rule Import = {
+  @import "import" specifier:$String ";"
 };
 
 rule Enum = {

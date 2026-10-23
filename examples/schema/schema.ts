@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { type Binding, type Checker } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage } from "../../src/language.ts";
+import { defineLanguage, importSpecifier } from "../../src/language.ts";
 import { runtimeModule } from "../../src/runtime/index.ts";
 import type { Text } from "../../src/source.ts";
 import { source, ts } from "../../src/ts/index.ts";
@@ -180,6 +180,7 @@ const resolveBase = (
   base: Base,
   enums: ReadonlyMap<string, Enum>,
   models: ReadonlyMap<string, Model>,
+  imported: ReadonlyMap<string, SchemaType>,
   cx: Checker<Checked>,
 ): SchemaType | undefined => {
   const name = base.name.text;
@@ -189,6 +190,11 @@ const resolveBase = (
     return { kind: "enum", name, members: enumeration.members.map((member) => member.text) };
   }
   if (models.has(name)) return { kind: "model", name };
+  const foreign = imported.get(name);
+  if (foreign) {
+    cx.imported(name, base.name);
+    return foreign;
+  }
   cx.error(`Unknown type ${JSON.stringify(name)}`, base.name);
   return undefined;
 };
@@ -223,6 +229,44 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   const mutations: (Insert | Update | Delete)[] = [];
   const bindings = new Map<string, Binding<Checked>>();
   const names = new Set<string>();
+  const importedTypes = new Map<string, SchemaType>();
+  const importedEnums: EnumIR[] = [];
+  const importedModels: ModelIR[] = [];
+
+  for (const dependency of cx.dependencies.all) {
+    const module = dependency.module as SchemaModule | null;
+    if (!module) continue;
+    for (const enumeration of module.enums) {
+      if (!importedTypes.has(enumeration.name.text)) {
+        const binding = dependency.exports.get(enumeration.name.text) ?? enumeration.binding;
+        const type = binding.type;
+        importedTypes.set(
+          enumeration.name.text,
+          type && type.kind === "enum" ? type : {
+            kind: "enum",
+            name: enumeration.name.text,
+            members: enumeration.members.map((member) => member.name.text),
+          },
+        );
+        importedEnums.push({ ...enumeration, binding });
+      }
+    }
+    for (const model of module.models) {
+      if (!importedTypes.has(model.name.text)) {
+        const binding = dependency.exports.get(model.name.text) ?? model.binding;
+        const type = binding.type;
+        importedTypes.set(
+          model.name.text,
+          type && type.kind === "model" ? type : { kind: "model", name: model.name.text },
+        );
+        importedModels.push({ ...model, binding });
+      }
+    }
+    for (const name of dependency.exports.keys()) {
+      cx.imported(name);
+      names.add(name);
+    }
+  }
 
   const claim = (name: Text, kind: "enum" | "model" | "query" | "mutation", type?: Checked) => {
     if (names.has(name.text)) {
@@ -247,6 +291,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   };
 
   for (const declaration of file.declarations) {
+    if (declaration.kind === "import") continue;
     if (declaration.kind === "enum") {
       enums.set(declaration.name.text, declaration);
       claim(declaration.name, "enum", {
@@ -266,7 +311,13 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   }
 
   const enumMembers = new Map<string, Map<string, Binding<Checked>>>();
-  const enumIRs: EnumIR[] = [];
+  const enumIRs: EnumIR[] = [...importedEnums];
+  for (const enumeration of importedEnums) {
+    enumMembers.set(
+      enumeration.name.text,
+      new Map(enumeration.members.map((member) => [member.name.text, member.binding])),
+    );
+  }
   for (const declaration of enums.values()) {
     const type: SchemaType = {
       kind: "enum",
@@ -346,7 +397,11 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   };
 
   const modelFields = new Map<string, Map<string, FieldIR>>();
-  const modelIRs: ModelIR[] = [];
+  const modelIRs: ModelIR[] = [...importedModels];
+  const localModels: ModelIR[] = [];
+  for (const model of importedModels) {
+    modelFields.set(model.name.text, new Map(model.fields.map((field) => [field.name.text, field])));
+  }
   for (const declaration of models.values()) {
     const seen = new Set<string>();
     const fields: FieldIR[] = [];
@@ -362,7 +417,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         cx.error("Fields cannot have list types", field.type);
         continue;
       }
-      const type = resolveBase(resolved.base, enums, models, cx);
+      const type = resolveBase(resolved.base, enums, models, importedTypes, cx);
       if (!type) continue;
       const attributes = new Map<string, Attribute>();
       for (const attribute of field.attributes) {
@@ -447,10 +502,11 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     const modelBinding = bindings.get(declaration.name.text)!;
     const model: ModelIR = { name: declaration.name, fields, primary, binding: modelBinding };
     modelIRs.push(model);
+    localModels.push(model);
     modelFields.set(declaration.name.text, new Map(fields.map((field) => [field.name.text, field])));
   }
 
-  for (const model of modelIRs) {
+  for (const model of localModels) {
     for (const field of model.fields) {
       if (field.type.kind !== "model") continue;
       const target = modelIRs.find((entry) => entry.name.text === field.type.name);
@@ -467,9 +523,8 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     const binding = bindings.get(declaration.name.text)!;
     const paramNames = new Set<string>();
     const params: ParamIR[] = [];
-    const sourceModel = models.get(declaration.source.text);
     const model = modelIRs.find((entry) => entry.name.text === declaration.source.text);
-    if (!sourceModel || !model) {
+    if (!model) {
       cx.error(`Query source ${JSON.stringify(declaration.source.text)} is not a model`, declaration.source);
       continue;
     }
@@ -490,7 +545,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         cx.error("Query parameters cannot be lists", param.type);
         return undefined;
       }
-      const type = resolveBase(resolved.base, enums, models, cx);
+      const type = resolveBase(resolved.base, enums, models, importedTypes, cx);
       if (!type) return undefined;
       const paramBinding = cx.declare(param.name.text, param.name.span, "parameter", type, { detail: "parameter" });
       cx.typed(param.name, type);
@@ -623,7 +678,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     }
 
     const declared = refValue(declaration.result);
-    const declaredBase = resolveBase(declared.base, enums, models, cx);
+    const declaredBase = resolveBase(declared.base, enums, models, importedTypes, cx);
     const computed: ResultIR = terminal === "count"
       ? {
         type: { kind: "scalar", name: "Int" },
@@ -996,23 +1051,28 @@ const mutationTs = (mutation: MutationIR): string => {
   return `  ${name}(params: ${paramObjectTs(mutationParams(mutation, mutation.where))}): number;\n`;
 };
 
-const types = (module: SchemaModule) => ts`${
-  module.enums.map((enumeration) =>
-    ts`export type ${source(enumeration.name)} = ${
-      enumeration.members.map((member, index) => ts`${index ? " | " : ""}"${source(member.name)}"`)
-    };
+const types = (module: SchemaModule) => {
+  const name = (value: Text, foreign: boolean) => foreign ? value.text : source(value);
+  return ts`${
+    module.enums.map((enumeration) =>
+      ts`export type ${name(enumeration.name, enumeration.binding.uri !== undefined)} = ${
+        enumeration.members.map((member, index) =>
+          ts`${index ? " | " : ""}"${name(member.name, enumeration.binding.uri !== undefined)}"`
+        )
+      };
 `
-  )
-}${
-  module.models.map((model) =>
-    ts`export interface ${source(model.name)} {
+    )
+  }${
+    module.models.map((model) => {
+      const foreign = model.binding.uri !== undefined;
+      return ts`export interface ${name(model.name, foreign)} {
 ${
-      model.fields.map((field) => ts`  readonly ${source(field.name)}: ${fieldTs(field)};
+        model.fields.map((field) => ts`  readonly ${name(field.name, foreign)}: ${fieldTs(field)};
 `)
-    }}
-`
-  )
-}export interface Database {
+      }}
+`;
+    })
+  }export interface Database {
   readonly sql: string;
   exec(sql: string): void;
   close(): void;
@@ -1031,6 +1091,7 @@ ${
 export declare const sql: string;
 export declare function open(database?: string): Database;
 `;
+};
 
 type RuntimeBinding =
   | { readonly sqlName: string; readonly kind: "param"; readonly name: string }
@@ -1316,6 +1377,9 @@ export const schema = defineLanguage<File, SchemaModule, Checked>({
   extensions: [".schema"],
   grammar,
   check,
+  imports: (file) =>
+    file.declarations.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
+  exports: (module) => [...module.enums, ...module.models, ...module.queries].map((entry) => entry.binding),
   typescript: types,
   runtime,
   show: (type) => type.kind === "query" || type.kind === "mutation" ? signatureText(type) : display(type),

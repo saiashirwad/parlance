@@ -4,6 +4,7 @@ skip /\s+/
 skip /\/\/[^\n]*/
 
 word /[A-Za-z_][A-Za-z0-9_]*/
+token String /"([^"\\\n]|\\.)*"/
 
 root File
 
@@ -12,7 +13,12 @@ rule File = {
 };
 
 rule Event = {
-  @event "event" name:Name payload:Payload?
+  | Import
+  | @event "event" name:Name payload:Payload?
+};
+
+rule Import = {
+  @import "import" specifier:$String ";"
 };
 
 rule Payload = {

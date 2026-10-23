@@ -4,7 +4,8 @@ import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { discoverConfig, loadLanguages } from "../config.ts";
 import { type Diagnostic, site } from "../diagnostic.ts";
-import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
+import { extensionMap, type AnyLanguage } from "../language.ts";
+import { ModuleGraph } from "../modules.ts";
 import { type Mapping } from "./template.ts";
 
 type HostConfig = {
@@ -33,6 +34,7 @@ type Project = {
   readonly watchedFiles: readonly string[];
   readonly configIdentity: string;
   readonly error: string | null;
+  readonly graph: ModuleGraph;
 };
 
 const emptyModule = "export {};\n";
@@ -102,6 +104,7 @@ const buildProject = async (
       watchedFiles: watched,
       configIdentity: identity(configured, watched),
       error: null,
+      graph: new ModuleGraph({ languages }),
     };
   } catch (cause) {
     return {
@@ -112,6 +115,7 @@ const buildProject = async (
       watchedFiles: [],
       configIdentity: `error:${String(cause)}`,
       error: `Cannot load ${configured ?? "language config"}: ${cause instanceof Error ? cause.message : String(cause)}`,
+      graph: new ModuleGraph({ languages: [] }),
     };
   }
 };
@@ -141,7 +145,7 @@ const transform = (project: Project, fileName: string, content: string): Transfo
   if (!language) return failed(`No parlance language is registered for ${extname(fileName)} files`);
   try {
     const uri = pathToFileURL(fileName).href;
-    const analysis = analyze(language, content, uri);
+    const analysis = project.graph.analyze(uri, { source: content });
     const doc = language.typescript && analysis.ir !== null ? language.typescript(analysis.ir) : null;
     return {
       text: doc?.text || emptyModule,

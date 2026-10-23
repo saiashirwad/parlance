@@ -21,7 +21,17 @@ export interface EventEventNode {
   readonly span: Span;
 }
 
-export type Event = EventEventNode;
+export type Event =
+  | Import
+  | EventEventNode;
+
+export interface ImportImportNode {
+  readonly kind: "import";
+  readonly specifier: Text;
+  readonly span: Span;
+}
+
+export type Import = ImportImportNode;
 
 export interface PayloadPayloadNode {
   readonly kind: "payload";

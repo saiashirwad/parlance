@@ -1,0 +1,9 @@
+schema Catalog
+
+import "./blog.schema";
+
+model Catalog {
+  id: Int @primary @auto
+  name: String
+  owner: User
+}
