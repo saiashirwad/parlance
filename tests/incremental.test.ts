@@ -376,6 +376,19 @@ test("reparse never mutates the previous result", () => {
   assert.deepEqual(result.diagnostics, calc.parse(next).diagnostics);
 });
 
+test("mutate shifts the previous tree in place", () => {
+  const old = "show a;\nshow b;\nshow c;\nshow d;\nlet ;";
+  const edit = { start: 5, end: 6, insert: "abcdefghijklmnopqrstu" };
+  const source = old.slice(0, edit.start) + edit.insert + old.slice(edit.end);
+  const previous = calc.parse(old);
+  const result = reparse(calc.spec, previous, source, edit, { previousSource: old, mutate: true });
+  const full = calc.parse(source);
+  assert.deepEqual(result.value, full.value);
+  assert.deepEqual(result.diagnostics, full.diagnostics);
+  assert.equal(JSON.stringify(result.tokens), JSON.stringify(full.tokens));
+  assert.equal(JSON.stringify(result.trivia), JSON.stringify(full.trivia));
+});
+
 test("grammars without incremental support fall back to a full parse", () => {
   const parsed = parseGrammar(String.raw`
 grammar Plain

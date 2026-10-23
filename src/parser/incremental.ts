@@ -355,6 +355,8 @@ export const reparse = <A>(
   const repairedStart = tokens[startToken]!.span.start;
   const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
 
+  // Snapshot before `mutate` shifts the reused items in place.
+  const lastOldEnd = items[items.length - 1]?.span.end;
   const before = count === 0 || low < 0 ? [] : items.slice(0, low);
   const olds = count === 0 || low < 0 ? [] : items.slice(end + 1);
   const shift = (value: unknown): unknown => {
@@ -405,9 +407,8 @@ export const reparse = <A>(
     const clone = { ...root, [field]: spliced };
     const oldRootSpan = root.span as Span | undefined;
     const firstOld = items[0]?.span;
-    const lastOld = items[items.length - 1]?.span;
     const rootStartsBeforeItems = oldRootSpan !== undefined && firstOld !== undefined && oldRootSpan.start < firstOld.start;
-    const rootEndsAfterItems = oldRootSpan !== undefined && lastOld !== undefined && oldRootSpan.end > lastOld.end;
+    const rootEndsAfterItems = oldRootSpan !== undefined && lastOldEnd !== undefined && oldRootSpan.end > lastOldEnd;
     const first = spliced[0];
     const last = spliced[spliced.length - 1];
     // A window at token 0 reparsed every leading recovery token, so the root
