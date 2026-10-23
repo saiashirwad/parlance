@@ -211,6 +211,59 @@ test("tokenization changes and encoding: quote, comment break, CRLF, surrogate p
   });
 });
 
+test("tokenization can change before the edit: distant quote, merged boundaries", () => {
+  const unterminated = 'let a = "abc\nlet b = 1;\n';
+  const repaired = check(
+    "close a quote that was open before the edit",
+    unterminated,
+    { start: unterminated.length, end: unterminated.length, insert: '";\n' },
+    strings.spec,
+    (source) => strings.parse(source),
+  );
+  assert.equal(repaired.result.ok, true);
+
+  const open = 'let a = 1;\nlet b = 2;\n';
+  check("insert a character that merges with the next word", open, {
+    start: at(open, "let b"),
+    end: at(open, "let b"),
+    insert: "x",
+  });
+  check("insert a character that merges with the previous word", open, {
+    start: at(open, "let b") + 3,
+    end: at(open, "let b") + 3,
+    insert: "x",
+  });
+  check("delete a quote far from the end", 'let a = "one";\nlet b = "two";\n', {
+    start: at('let a = "one";\nlet b = "two";\n', '"two"'),
+    end: at('let a = "one";\nlet b = "two";\n', '"two"') + 1,
+    insert: "",
+  }, strings.spec, (source) => strings.parse(source));
+});
+
+test("lookaround grammars take the guarded full-lex path", () => {
+  const parsed = parseGrammar(String.raw`
+grammar Look
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+token Tag /tag(?=:)/
+root File
+rule File = { @file items:Decl* };
+rule Decl = {
+  | @tag name:$Tag ":" value:Name ";"
+  | @set "set" name:Name ";"
+};
+rule Name = { word };
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const look = compileGrammar(parsed.file);
+  assert.equal(look.valid, true, look.diagnostics.map((entry) => entry.message).join("\n"));
+  const source = "tag:a;\nset b;\ntag:c;\n";
+  check("lookahead: replace a tag", source, { start: at(source, ":"), end: at(source, ":") + 1, insert: ";" }, look.spec, (value) =>
+    look.parse(value));
+  check("lookahead: insert before a tag", source, { start: 0, end: 0, insert: "set z;\n" }, look.spec, (value) => look.parse(value));
+});
+
 test("array-shaped roots splice items directly", () => {
   const source = "item a;\nitem b;\nitem c;\nitem d;\nitem e;\n";
   const start = at(source, "c;");
