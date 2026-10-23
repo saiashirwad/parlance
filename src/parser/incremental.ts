@@ -1,6 +1,6 @@
 import { type Diagnostic, sortDiagnostics } from "../diagnostic.ts";
 import { type Span } from "../source.ts";
-import { lex } from "./lex.ts";
+import { lex, lexFrom } from "./lex.ts";
 import {
   type Edit,
   type ItemRange,
@@ -9,7 +9,7 @@ import {
   parseItemRange,
   parseSource,
 } from "./parse.ts";
-import type { GrammarSpec, Key, LexToken } from "./spec.ts";
+import type { GrammarSpec, Key, LexToken, TokenList, Trivia } from "./spec.ts";
 
 export type IncrementalOptions = ParseOptions & {
   /** Compare against a full parse and fall back on any difference. */
@@ -134,6 +134,149 @@ const selectWindow = (items: readonly Item[], edit: Edit): readonly [number, num
   return [Math.max(0, low - 1), Math.min(count - 1, high + 1)];
 };
 
+const lookaround = /\(\?<?[=!]/;
+
+const localLexing = new WeakMap<GrammarSpec, boolean>();
+
+/**
+ * A regex with a lookaround can decide a token from text outside the token.
+ * Only then does reusing tokens before an edit need a full-stream comparison.
+ */
+const locallyLexable = (spec: GrammarSpec): boolean => {
+  const cached = localLexing.get(spec);
+  if (cached !== undefined) return cached;
+  const patterns = [
+    ...spec.skips.map((pattern) => pattern.source),
+    spec.word.source,
+    ...spec.tokens.map((token) => token.regex.source),
+    ...spec.inline.map((inline) => inline.regex.source),
+  ];
+  const value = !patterns.some((pattern) => lookaround.test(pattern));
+  localLexing.set(spec, value);
+  return value;
+};
+
+const countTokenEndsBy = (tokens: readonly LexToken[], offset: number): number => {
+  let low = 0;
+  let high = tokens.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (tokens[middle]!.span.end <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
+const tokenStartingAt = (tokens: readonly LexToken[], offset: number): number => {
+  let low = 0;
+  let high = tokens.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (tokens[middle]!.span.start < offset) low = middle + 1;
+    else high = middle;
+  }
+  return low < tokens.length && tokens[low]!.span.start === offset ? low : -1;
+};
+
+const countTriviaEndsBy = (trivia: readonly Trivia[], offset: number): number => {
+  let low = 0;
+  let high = trivia.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (trivia[middle]!.span.end <= offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
+const countTriviaStartsBefore = (trivia: readonly Trivia[], offset: number): number => {
+  let low = 0;
+  let high = trivia.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (trivia[middle]!.span.start < offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+};
+
+const shiftToken = (token: LexToken, delta: number): LexToken => ({
+  ...token,
+  span: { start: token.span.start + delta, end: token.span.end + delta },
+});
+
+const shiftTrivia = (entry: Trivia, delta: number): Trivia => ({
+  ...entry,
+  span: { start: entry.span.start + delta, end: entry.span.end + delta },
+});
+
+/**
+ * Reuse the previous token stream around the edit.
+ *
+ * Tokens before the last token that ends before the edit are reused: their text
+ * and lexer start are unchanged. The token straddling the edit start is relexed
+ * so a merge at the boundary is seen. If any reused token is an error, lexing
+ * restarts at the first one, because its extent (an unclosed quote, for
+ * example) can depend on text after the edit.
+ *
+ * Lexing stops at the first boundary at or after the unchanged suffix where the
+ * produced token equals the previous token shifted by `delta`. From that offset
+ * the remaining source text is identical and the lexer holds no state, so the
+ * shifted previous tail is the exact tokenization.
+ */
+const relex = (
+  spec: GrammarSpec,
+  previous: ParseResult<unknown>,
+  source: string,
+  edit: Edit,
+  delta: number,
+): TokenList => {
+  const old = previous.tokens;
+  let restartIndex = countTokenEndsBy(old, edit.start) - 1;
+  for (let index = 0; index < restartIndex; index++) {
+    if (old[index]!.kind !== "error") continue;
+    restartIndex = index;
+    break;
+  }
+  const restartOffset = restartIndex < 0 ? 0 : old[restartIndex]!.span.start;
+  const prefixCount = Math.max(0, restartIndex);
+  const resyncFrom = edit.start + edit.insert.length;
+  let resyncBase = -1;
+  const run = lexFrom(spec, source, restartOffset, (tokens, offset) => {
+    if (offset < resyncFrom) return false;
+    const token = tokens[tokens.length - 1]!;
+    const index = tokenStartingAt(old, token.span.start - delta);
+    if (index < restartIndex) return false;
+    const before = old[index]!;
+    if (
+      token.kind !== before.kind
+      || token.text !== before.text
+      || token.name !== before.name
+      || token.span.end !== before.span.end + delta
+    ) return false;
+    resyncBase = index;
+    return true;
+  });
+
+  const tailFrom = resyncBase + 1;
+  const tailTokens = tailFrom === 0 || tailFrom >= old.length
+    ? []
+    : delta === 0
+    ? old.slice(tailFrom)
+    : old.slice(tailFrom).map((token) => shiftToken(token, delta));
+  const tokens = old.slice(0, prefixCount).concat(run.tokens, tailTokens);
+
+  const prefixTrivia = previous.trivia.slice(0, countTriviaEndsBy(previous.trivia, restartOffset));
+  let tailTrivia: readonly Trivia[] = [];
+  if (tailFrom > 0 && tailFrom < old.length) {
+    const from = countTriviaStartsBefore(previous.trivia, old[tailFrom - 1]!.span.end);
+    tailTrivia = previous.trivia.slice(from);
+    if (delta !== 0) tailTrivia = tailTrivia.map((entry) => shiftTrivia(entry, delta));
+  }
+  const trivia = prefixTrivia.concat(run.trivia, tailTrivia);
+  return { tokens, trivia };
+};
+
 export const reparse = <A>(
   spec: GrammarSpec,
   previous: ParseResult<A>,
@@ -192,28 +335,34 @@ export const reparse = <A>(
   const mapEnd = (offset: number): number =>
     offset < edit.start ? offset : offset >= edit.end ? offset + delta : edit.start + edit.insert.length;
 
-  const lexed = lex(spec, source);
-  // Tokenization outside the edit must be unchanged. A broken quote or comment
-  // can merge tokens far past the edited item; comparing the reused token tail
-  // catches that before any AST is reused.
-  const tokensOutsideEdit = (): boolean => {
-    let next = 0;
-    for (const old of previous.tokens) {
-      if (old.kind === "eof") continue;
-      if (old.span.end > edit.start && old.span.start < edit.end) continue;
-      const expected = old.span.start >= edit.end ? old.span.start + delta : old.span.start;
-      while (next < lexed.tokens.length && lexed.tokens[next]!.span.start < expected) next++;
-      const token = lexed.tokens[next];
-      if (
-        !token || token.span.start !== expected || token.kind !== old.kind
-        || token.text !== old.text || token.name !== old.name
-      ) return false;
-      next++;
-    }
-    return true;
-  };
-  if (!tokensOutsideEdit()) return fallback();
-  const tokens = lexed.tokens;
+  let tokens: readonly LexToken[];
+  let trivia: readonly Trivia[];
+  if (locallyLexable(spec)) {
+    ({ tokens, trivia } = relex(spec, previous, source, edit, delta));
+  } else {
+    // A lookaround can make tokenization outside the edit depend on text
+    // inside it; compare the whole stream before reusing any AST.
+    const lexed = lex(spec, source);
+    const unchangedOutsideEdit = (): boolean => {
+      let next = 0;
+      for (const old of previous.tokens) {
+        if (old.kind === "eof") continue;
+        if (old.span.end > edit.start && old.span.start < edit.end) continue;
+        const expected = old.span.start >= edit.end ? old.span.start + delta : old.span.start;
+        while (next < lexed.tokens.length && lexed.tokens[next]!.span.start < expected) next++;
+        const token = lexed.tokens[next];
+        if (
+          !token || token.span.start !== expected || token.kind !== old.kind
+          || token.text !== old.text || token.name !== old.name
+        ) return false;
+        next++;
+      }
+      return true;
+    };
+    if (!unchangedOutsideEdit()) return fallback();
+    tokens = lexed.tokens;
+    trivia = lexed.trivia;
+  }
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
   let end = high;
@@ -254,6 +403,9 @@ export const reparse = <A>(
     }
   }
 
+  const repairedStart = tokens[startToken]!.span.start;
+  const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
+
   const before = count === 0 || low < 0 ? [] : items.slice(0, low);
   const olds = count === 0 || low < 0 ? [] : items.slice(end + 1);
   const shift = (value: unknown): unknown => {
@@ -282,24 +434,9 @@ export const reparse = <A>(
     for (const [key, child] of Object.entries(record)) clone[key] = shift(child);
     return clone;
   };
-  const after = olds.map(shift);
-
-  if (options.previousSource !== undefined) {
-    const oldSource = options.previousSource;
-    for (const item of before) {
-      if (oldSource.slice(item.span.start, item.span.end) !== source.slice(item.span.start, item.span.end)) {
-        return fallback();
-      }
-    }
-    for (let index = 0; index < olds.length; index++) {
-      const moved = after[index];
-      if (!isItem(moved)) return fallback();
-      const item = olds[index]!;
-      if (oldSource.slice(item.span.start, item.span.end) !== source.slice(moved.span.start, moved.span.end)) {
-        return fallback();
-      }
-    }
-  }
+  // A zero-length delta leaves every reused span in place. Reuse the nodes
+  // directly instead of deep-cloning them; `before` already shares this way.
+  const after = delta === 0 ? olds : olds.map(shift);
 
   const spliced: unknown[] = [...before, ...range.values, ...after];
   if (!ordered(spliced, source.length)) return fallback();
@@ -329,17 +466,18 @@ export const reparse = <A>(
       : first && isItem(first)
       ? first.span.start
       : tokens[0]!.span.start;
+    const lastEnd = last && isItem(last) ? last.span.end : start;
+    // The root repetition spans the recovery tokens it skipped, not just its
+    // items, so a repaired tail can reach past the last item.
     const rootEnd = hasFooter && oldRootSpan
       ? mapEnd(oldRootSpan.end)
-      : last && isItem(last)
-      ? last.span.end
-      : start;
+      : end === count - 1
+      ? Math.max(lastEnd, repairedEnd)
+      : lastEnd;
     clone.span = { start, end: rootEnd };
     value = clone;
   }
 
-  const repairedStart = tokens[startToken]!.span.start;
-  const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
   const kept: Diagnostic[] = [];
   for (const entry of previous.diagnostics) {
     const start = mapOffset(entry.span.start);
@@ -356,7 +494,7 @@ export const reparse = <A>(
     ok,
     value: value as A,
     tokens,
-    trivia: lexed.trivia,
+    trivia,
     diagnostics,
     stats: {
       fallback: false,
