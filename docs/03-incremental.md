@@ -63,7 +63,7 @@ After, for the benchmark edit (a same-length replacement in the middle):
 | splice and diagnostics | 2.9 |
 | full parse, for comparison | 219 to 285 |
 
-Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. A later run on the integrated tree measured 77.2 ms against 226.6 ms, or 34%; machine load moves both numbers, but the ratio stays below half.
+Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 77 ms against 227 to 284 ms, or 25% to 34%; machine load moves both numbers, but the ratio stays well below half.
 
 The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
 

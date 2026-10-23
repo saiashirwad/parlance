@@ -73,7 +73,7 @@ Working:
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step.
 - Named targets with `parlance emit`.
-- Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in roughly 75–80 ms against 225–285 ms for a full parse, with 99,998 of 100,000 items reused. The LSP uses it; the checker still runs over the whole file.
+- Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in roughly 72–77 ms against 227–284 ms for a full parse, with 99,998 of 100,000 items reused. The LSP uses it; the checker still runs over the whole file.
 - The calc, schema, and machine examples, exercised by `pnpm check`.
 
 Not built:

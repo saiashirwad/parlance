@@ -10,7 +10,7 @@
 
 ## How to get to it (user POV)
 
-An editor types into a large guest file and expects diagnostics and facts to update without a full reparse. On 2026-10-23 the 2.8 MB calc corpus measured ~77 ms for a middle edit against ~227 ms for a full parse, with 99,998 of 100,000 items reused.
+An editor types into a large guest file and expects diagnostics and facts to update without a full reparse. On 2026-10-23 the 2.8 MB calc corpus measured 72–77 ms for a middle edit against 227–284 ms for a full parse, with 99,998 of 100,000 items reused.
 
 ## Driving it with the shell
 
@@ -28,7 +28,7 @@ node tools/lsp-smoke.ts
 Pass criteria:
 - Oracle: all 2,400 edits match the full parse for value, diagnostics, `ok`, tokens, and trivia; fewer than 30% fall back; previous results are never mutated.
 - Benchmark: `reused + reparsed` equals the item count; no fallback; the `edit ms` column is recorded, not assumed.
-- On 2026-10-23 the 2.8 MB calc corpus measured ~227 ms full parse and ~77 ms edit (34%, down from ~243 ms before token reuse). The target is `edit ms` below 50% of `parse ms`, no fallback, and the oracle green. Record every fresh number; do not assume the ratio holds for suffix edits.
+- On 2026-10-23 the 2.8 MB calc corpus measured 227–284 ms full parse and 72–77 ms edit (25–34%, down from ~243 ms before token reuse). The target is `edit ms` below 50% of `parse ms`, no fallback, and the oracle green. Record every fresh number; do not assume the ratio holds for suffix edits.
 
 ## Gotchas
 
