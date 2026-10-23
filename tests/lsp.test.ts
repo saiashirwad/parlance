@@ -63,18 +63,24 @@ class LspClient {
     this.send({ method, params });
   }
 
-  async open(uri: string, text: string): Promise<Message> {
-    this.notify("textDocument/didOpen", {
-      textDocument: { uri, languageId: "calc", version: 1, text },
-    });
+  async waitDiagnostics(uri: string, version: number): Promise<Message> {
     for (let attempt = 0; attempt < 100; attempt++) {
       const diagnostic = this.#notifications.find((message) =>
-        message.method === "textDocument/publishDiagnostics" && message.params?.uri === uri
+        message.method === "textDocument/publishDiagnostics"
+        && message.params?.uri === uri
+        && message.params?.version === version
       );
       if (diagnostic) return diagnostic;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
-    throw new Error("no diagnostics notification");
+    throw new Error(`no diagnostics notification for version ${version}`);
+  }
+
+  async open(uri: string, text: string): Promise<Message> {
+    this.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "calc", version: 1, text },
+    });
+    return this.waitDiagnostics(uri, 1);
   }
 
   close(): void {
@@ -201,6 +207,20 @@ test("the LSP resolves a definition across imported files", async () => {
     });
     assert.ok(renamed.result.changes[blogUri].length >= 1, "rename missed the declaration");
     assert.ok(renamed.result.changes[catalogUri].length >= 1, "rename missed the imported use");
+
+    const moved = "schema Blog\n// note\nmodel User {\n  id: Int @primary\n}\n";
+    client.notify("textDocument/didChange", {
+      textDocument: { uri: blogUri, version: 2 },
+      contentChanges: [{ text: moved }],
+    });
+    const published = await client.waitDiagnostics(blogUri, 2);
+    assert.deepEqual(published.params.diagnostics, []);
+    const movedDefinition = await client.request("textDocument/definition", {
+      textDocument: { uri: catalogUri },
+      position: { line, character },
+    });
+    assert.equal(movedDefinition.result.uri, blogUri);
+    assert.equal(movedDefinition.result.range.start.line, 2, "the dependent analysis kept the old definition span");
   } finally {
     client.close();
   }

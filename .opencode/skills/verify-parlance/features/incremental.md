@@ -32,6 +32,8 @@ Pass criteria:
 
 ## Gotchas
 
+- Reused prefix and suffix items are guarded by one-for-one token comparison, so a lookahead token reclassified by later text falls back to a full parse.
+- A root with uncaptured header/footer syntax is `guarded`; an edit at or outside the item repetition falls back, and the root span keeps the header and footer.
 - The prefix lex runs from offset 0 to the resync boundary, so the saving depends on edit position: a suffix edit is only ~1.8x faster, a middle edit ~3x.
 - A grammar with lookbehind (`(?<=` or `(?<!`) in a token, skip, word, or inline regex disables tail reuse and lexes to the end.
 - `mutate: true` shifts reused ASTs in place and discards the previous tree. Use it only where the previous analysis is dropped immediately (the LSP does).

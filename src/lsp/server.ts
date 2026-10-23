@@ -217,13 +217,13 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     },
   }));
 
-  const update = (document: TextDocument): void => {
+  const update = (document: TextDocument, force = false): void => {
     const language = languageFor(document.uri);
     if (!language) return;
     const previous = analyses.get(document.uri);
     const text = document.getText();
     const edit = previous ? diff(previous.source, text) : null;
-    if (previous && edit === null) return;
+    if (previous && edit === null && !force) return;
     let analysis: ReturnType<typeof analyze>;
     try {
       if (previous && edit) {
@@ -266,7 +266,26 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
 
   const analysisFor = (uri: string): ReturnType<typeof analyze> | undefined => analyses.get(uri);
 
-  documents.onDidChangeContent(({ document }) => update(document));
+  /** Refresh open documents whose graph node was invalidated by another edit. */
+  const refreshOpenDependents = (changed: string): void => {
+    for (let pass = 0; pass <= documents.all().length; pass++) {
+      let updated = false;
+      for (const document of documents.all()) {
+        if (document.uri === changed) continue;
+        const stored = analyses.get(document.uri);
+        if (stored === undefined) continue;
+        if (graph.node(document.uri)?.analysis === stored) continue;
+        update(document, true);
+        updated = true;
+      }
+      if (!updated) return;
+    }
+  };
+
+  documents.onDidChangeContent(({ document }) => {
+    update(document);
+    refreshOpenDependents(document.uri);
+  });
   documents.onDidClose(({ document }) => {
     analyses.delete(document.uri);
     encoded.delete(document.uri);
