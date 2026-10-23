@@ -5,31 +5,29 @@
 ## The edit path
 
 1. Check that `previous.value` has the item list named by `spec.incremental` and that item spans are ordered inside `previousSource`.
-2. Reuse the token stream around the edit.
-3. Pick the item window whose spans touch the edit, plus one neighbour on each side.
-4. Parse only that window with `parseItemRange`.
-5. Splice the new window values between the reused items before and after it. Shift spans after the edit when the edit changes the source length.
+2. Lex the new source from offset 0. Stop as soon as the token stream has resynchronized with the previous one.
+3. Reuse the previous token tail from the resync boundary, shifted by `delta`.
+4. Pick the item window whose spans touch the edit, plus one neighbour on each side.
+5. Parse only that window with `parseItemRange`.
+6. Splice the new window values between the reused items before and after it. Shift spans after the edit when the edit changes the source length.
 
 `stats.reused + stats.reparsed` equals the new item count. `stats.fallback` is true only when the caller gets a full parse.
 
 ## Token reuse
 
-The lexer has no state at a token boundary. If the text before a token is unchanged, the tokenization from that boundary is unchanged too. That gives a local restart and a local stop.
+The lexer carries no state across tokens. A match reads text before its start only through lookbehind, an anchor, or a word boundary. The first reused token is compared against the previous stream, so its left context is checked. Later tokens see the same preceding characters inside the identical suffix. Lookbehind can read further back, so it disables tail reuse.
 
-The restart is the last token that ends at or before `edit.start`. The token that straddles the edit start is lexed again, so a character inserted at the boundary can merge with it. The lexer then runs forward and stops at the first token boundary where three things hold.
+`relex` lexes the new source from offset 0 and stops at the first token boundary where three things hold.
 
 - The boundary is at or after `edit.start + edit.insert.length`, so the rest of the new source equals the rest of the old source shifted by `delta`.
 - The new token has the same kind, text, and name as the old token at that boundary.
 - Its span equals the old span shifted by `delta`.
 
-From that boundary the lexer sees identical text with no stored state, so the shifted old tail is the exact tokenization. The function stops early when it finds no such boundary.
+From that boundary the lexer sees identical text with no stored state, so the shifted old tail is the exact tokenization. When no boundary qualifies, the run reaches end of file and no tail is reused. The result is still correct, just not incremental on the token side.
 
-Two hazards get explicit handling.
+Tokens before the edit are not reused. A regex match can reach across the edit even when the grammar has no lookaround. Take `token T /a[^z]*z|a/` on `a; a; a; a;`. Every `a` is a one-character `T` token because no `z` follows. Change the last `a` to `z` and the first `a` becomes one token spanning the whole line. A restart near the edit would keep the stale prefix. Lexing from 0 catches it. The same holds for a greedy `.*` that can absorb a later terminator. A local restart measured 12 ms on the benchmark edit, but it was not sound for these grammars, so it is not in the code.
 
-- An `error` token before the restart can grow into a real token after the edit. The classic case is an unclosed quote that pairs with a quote inserted later. When any reused token is an `error`, lexing restarts at the first one.
-- A regex with a lookaround can decide a token from text outside the token. For those grammars `locallyLexable` is false and `reparse` falls back to a full lex plus the old full-stream guard.
-
-Comments and strings without lookaround need no extra check. An unclosed block comment runs to end of file, so an edit after it is inside trivia and the restart lands before it. A line comment can only change text after its newline, which is inside the relexed region. An unclosed token regex produces an `error` token, which the restart rule covers.
+Lookbehind is the one regex feature that can read text before the resync boundary. When a token, skip, word, or inline regex contains `(?<=` or `(?<!`, `reusableTail` returns false and the run goes to end of file.
 
 ## Span shifting
 
@@ -37,11 +35,11 @@ When `delta` is 0, no span moves. `reparse` reuses the previous item nodes by re
 
 When `delta` is not 0, every span after the edit needs a new number. The value uses plain objects, so the only correct result is a clone with shifted spans. The clone copies keys with `Object.keys` instead of allocating an entry pair per node with `Object.entries`. `mutate: true` still shifts the previous nodes in place and does not allocate.
 
-The root span grows to cover recovery tokens the window parser skipped. A full parse computes the root span from the last token the root repetition consumed, not from the last item, and a repaired tail can pass the last item.
+The root span starts and ends where a full parse would put it, including recovery tokens that the root repetition skipped and a header before the item list.
 
 ## Measurements
 
-Machine: macOS, Node 24.22.0, 2026-10-23. Commands are `pnpm bench` for the table and the same script with a throwaway probe for the edit kinds the table does not cover.
+Machine: macOS, Node 24.22.0, 2026-10-23. Commands are `pnpm bench` for the table and a throwaway timing copy of `reparse` for the phase split and the other edit positions.
 
 Before this work, at 100,000 calc declarations (2.8 MB, 900,006 tokens):
 
@@ -54,20 +52,29 @@ Before this work, at 100,000 calc declarations (2.8 MB, 900,006 tokens):
 | diagnostics and splice | 11 |
 | full parse, for comparison | 250 to 279 |
 
-After:
+After, for the benchmark edit (a same-length replacement in the middle):
 
 | phase | ms |
 | --- | --- |
-| reuse tokens and trivia | 4 |
-| validation before lexing | 5 |
-| select and parse the window | 1.4 |
-| shift spans | 0 for a same-length edit |
-| splice and diagnostics | 2.7 |
-| full parse, for comparison | 224 to 237 |
+| validation before lexing | 6.3 |
+| lex from 0 to the resync boundary | 68.7 |
+| select and parse the window | 1.7 |
+| shift spans | 0.1 |
+| splice and diagnostics | 2.9 |
+| full parse, for comparison | 219 to 249 |
 
-The benchmark edit is a same-length replacement, so it takes the no-shift path. Three runs gave `edit ms` of 12.6, 12.8, and 11.9 against `parse ms` of 236.8, 224.1, and 226.7. That is 5.3% to 5.7% of a full parse.
+Three `pnpm bench` runs gave `edit ms` of 73.4, 74.5, and 77.0 against `parse ms` of 219.1, 229.6, and 248.8. That is 31% to 35% of a full parse.
 
-Edits that change the length still shift every later span. A throwaway probe on the same 100,000 declaration file measured one character inserted in the middle at 83 ms and one character deleted at 98 ms. An insertion at offset 0 measured 206 ms, because all 100,000 items and 900,000 tokens need new spans. The remaining bottleneck is that clone. It is linear in the file size and cannot disappear while `ParseResult.value` exposes absolute spans as plain objects. `mutate: true` avoids it for the LSP.
+The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
+
+| edit | ms | share of a full parse |
+| --- | --- | --- |
+| same-length, offset 4 | 13.7 | 6% |
+| same-length, middle | 79.7 | 33% |
+| same-length, last line | 130 | 55% |
+| one character inserted, middle | 154 | 65% |
+
+An insertion pays two extra costs. The reused tail tokens and trivia need shifted copies, and every AST span after the edit is cloned. On the same file the AST clone alone measured 63 ms. The remaining bottleneck for suffix edits is the prefix lex. It is linear in the distance from the start of the file to the edit. Removing it needs either a lexer with resumable state or a proof that a grammar's token regexes cannot reach across a boundary. `mutate: true` avoids the AST clone for the LSP.
 
 ## Verification
 
