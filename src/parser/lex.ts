@@ -14,21 +14,16 @@ const isWordStart = (code: number): boolean =>
 
 const isWordPart = (code: number): boolean => isWordStart(code) || (code >= 48 && code <= 57);
 
-export type LexRun = TokenList & {
-  /** Offset where the run stopped. Equals the source length when it reached eof. */
-  readonly next: number;
-};
-
 /**
  * Lex from a token boundary. `stop` runs after each token and can end the run
- * early; a stopped run has no eof token and `next` is the last token's end.
+ * early; a stopped run has no eof token.
  */
 export const lexFrom = (
   spec: GrammarSpec,
   source: string,
   start: number,
   stop?: (tokens: readonly LexToken[], offset: number) => boolean,
-): LexRun => {
+): TokenList => {
   const tokens: LexToken[] = [];
   const trivia: Trivia[] = [];
   const tokenKeys = spec.tokens.map((token) => `token:${token.name}` as Key);
@@ -168,7 +163,7 @@ export const lexFrom = (
     }
     tokens.push(token);
     offset = token.span.end;
-    if (stop !== undefined && stop(tokens, offset)) return { tokens, trivia, next: offset };
+    if (stop !== undefined && stop(tokens, offset)) return { tokens, trivia };
   }
   tokens.push({
     kind: "eof",
@@ -177,7 +172,7 @@ export const lexFrom = (
     key: "eof",
     highlight: null,
   });
-  return { tokens, trivia, next: source.length };
+  return { tokens, trivia };
 };
 
 export const lex = (spec: GrammarSpec, source: string): TokenList => {
