@@ -161,13 +161,13 @@ Only the root's declaration repetition recovers. Nested failures propagate to it
 
 When the root rule is a repetition of one item rule (`@file items:Decl*`), the compiler exposes item spans and enables incremental mode. `reparse(previous, previousSource, source, edit)`:
 
-1. Relex the new text in full. Lexing is linear; incremental lexing is a later optimization.
+1. Lex the new source from offset 0 and stop at the first token boundary at or after the edit where the new token equals the previous token shifted by the edit delta. Reuse the previous token and trivia tail from that boundary. Grammars with lookbehind lex to the end because a lookbehind can read before the boundary.
 2. Select the items intersecting the edit plus one untouched item on each side. The margin absorbs token merges at boundaries and bounded lookahead.
-3. Reuse items before the window. Deep-clone and shift items after the window by the edit delta; never mutate the previous tree.
+3. Reuse items before the window. When the edit changes the source length, clone and shift items after the window by the delta; when it does not, share them. Never mutate the previous tree.
 4. Parse only the new token range covering the window, using the same item loop and recovery as a full parse.
-5. Splice, then verify structural invariants. If invariants fail, or a reused item's text no longer matches, fall back to a full parse and say so in the stats.
+5. Splice, then verify structural invariants. If invariants fail, fall back to a full parse and say so in the stats.
 
-Soundness rests on four conditions the compiler enforces: the root has one item repetition, the item is productive, no parser state crosses an item boundary, and recovery is item-local. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead, and the tests include predicates at boundaries. Full-parse equality is the oracle for every randomized edit. The implementation is in `src/parser/incremental.ts`; `docs/03-incremental.md` will record the limits and measurements.
+Soundness rests on the root shape, a stateless lexer, and the resync guard: from the matched boundary the remaining source is byte-identical to the old source shifted by the delta, and the first reused token's left context has been checked. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead. Full-parse equality is the oracle for every randomized edit. [`03-incremental.md`](03-incremental.md) records the algorithm, limits, and measurements.
 
 ## Stage 2: checking
 

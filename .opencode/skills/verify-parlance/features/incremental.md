@@ -6,11 +6,11 @@
 - The result carries `stats`: `fallback`, `reused`, `reparsed`, `window`.
 - The LSP calls `reparse` on every change with `mutate: true`.
 - Full-parse equality is the oracle; `verify: true` compares and falls back on any difference.
-- Soundness guards: token equality outside the edit, reused item text equality, ordered spans, root shape.
+- Soundness guards: resync token equality after the edit, identical shifted suffix, lookbehind fallback, ordered spans, root shape.
 
 ## How to get to it (user POV)
 
-An editor types into a large guest file and expects diagnostics and facts to update without a full reparse. The CLI and library do not expose a latency promise yet; this map records the honest number.
+An editor types into a large guest file and expects diagnostics and facts to update without a full reparse. On 2026-10-23 the 2.8 MB calc corpus measured ~77 ms for a middle edit against ~227 ms for a full parse, with 99,998 of 100,000 items reused.
 
 ## Driving it with the shell
 
@@ -28,12 +28,13 @@ node tools/lsp-smoke.ts
 Pass criteria:
 - Oracle: all 2,400 edits match the full parse for value, diagnostics, `ok`, tokens, and trivia; fewer than 30% fall back; previous results are never mutated.
 - Benchmark: `reused + reparsed` equals the item count; no fallback; the `edit ms` column is recorded, not assumed.
-- On 2026-10-23 the 2.8 MB calc corpus measured ~232 ms full parse and ~243 ms edit. The edit path is correct but not faster yet (issue #1). Do not claim a latency win until `edit ms` is materially below `parse ms`.
+- On 2026-10-23 the 2.8 MB calc corpus measured ~227 ms full parse and ~77 ms edit (34%, down from ~243 ms before token reuse). The target is `edit ms` below 50% of `parse ms`, no fallback, and the oracle green. Record every fresh number; do not assume the ratio holds for suffix edits.
 
 ## Gotchas
 
+- The prefix lex runs from offset 0 to the resync boundary, so the saving depends on edit position: a suffix edit is only ~1.8x faster, a middle edit ~3x.
+- A grammar with lookbehind (`(?<=` or `(?<!`) in a token, skip, word, or inline regex disables tail reuse and lexes to the end.
 - `mutate: true` shifts reused ASTs in place and discards the previous tree. Use it only where the previous analysis is dropped immediately (the LSP does).
-- Full relex is still O(file); a broken quote or comment can change tokenization far past the edit, which is why the token guard is global.
 - The root must be a repetition of one item rule; otherwise `reparse` falls back to a full parse and says so.
 - Window selection adds one untouched item on each side to absorb token merges and bounded lookahead.
 - `docs/03-incremental.md` is the algorithm record; update it with any change to the guards or the window.

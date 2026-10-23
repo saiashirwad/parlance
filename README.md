@@ -59,10 +59,9 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/00-survey.md`](docs/00-survey.md): what the previous langkit assumed, what the measurements showed, and which assumptions failed.
 - [`docs/01-architecture.md`](docs/01-architecture.md): the pipeline from grammar to facts, projections, and hosts.
 - [`docs/02-grammar.md`](docs/02-grammar.md): the `.parl` language, expressions, static checks, recovery, and generated ASTs.
+- [`docs/03-incremental.md`](docs/03-incremental.md): reparse, token reuse, soundness guards, and measurements.
 - [`docs/04-authoring.md`](docs/04-authoring.md): a step-by-step guide to adding a language.
 - [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
-
-There is no `03-incremental.md` yet.
 
 ## Status
 
@@ -74,7 +73,7 @@ Working:
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step.
 - Named targets with `parlance emit`.
-- Incremental reparse when the root is an item repetition. The LSP uses it; the checker still runs over the whole file.
+- Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in roughly 75–80 ms against 225–285 ms for a full parse, with 99,998 of 100,000 items reused. The LSP uses it; the checker still runs over the whole file.
 - The calc, schema, and machine examples, exercised by `pnpm check`.
 
 Not built:
