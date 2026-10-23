@@ -108,6 +108,27 @@ local ok, failure = pcall(function()
   for _, symbol in ipairs(machineSymbols or {}) do machineNames[symbol.name] = true end
   assert(machineNames.pay and machineNames.Checkout, "machine symbols are missing pay or Checkout")
 
+  open("examples/advanced/trees.advanced")
+  assert(vim.bo.filetype == "advanced", "expected filetype advanced")
+  local advancedSymbols = request("textDocument/documentSymbol", { textDocument = { uri = vim.uri_from_bufnr(0) } })
+  local advancedNames = {}
+  for _, symbol in ipairs(advancedSymbols or {}) do advancedNames[symbol.name] = true end
+  assert(advancedNames.Tree and advancedNames.fromList and advancedNames.sumTree, "advanced symbols are missing")
+  local advancedSource = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local fromListLine = nil
+  for index, text in ipairs(advancedSource) do
+    if text:match("^let fromList") then fromListLine = index - 1 end
+  end
+  assert(fromListLine, "missing fromList line")
+  local fromListCharacter = advancedSource[fromListLine + 1]:find("fromList") - 1
+  local advancedHover = request("textDocument/hover", {
+    textDocument = { uri = vim.uri_from_bufnr(0) },
+    position = position(fromListLine, fromListCharacter),
+  })
+  assert(advancedHover.contents.value:find("Tree") ~= nil, "advanced hover did not show Tree: " .. advancedHover.contents.value)
+  local advancedTokens = request("textDocument/semanticTokens/full", { textDocument = { uri = vim.uri_from_bufnr(0) } })
+  assert(advancedTokens and advancedTokens.data and #advancedTokens.data > 0, "advanced semantic tokens are empty")
+
   open("src/grammar/grammar.parl")
   assert(vim.bo.filetype == "parl", "expected filetype parl")
   local grammarSource = vim.api.nvim_buf_get_lines(0, 0, -1, false)
@@ -135,5 +156,5 @@ if not ok then
   vim.cmd("cquit 1")
 end
 
-print("ok nvim: calc, schema, machine, parl, hover, definition, tokens, diagnostics")
+print("ok nvim: advanced, calc, schema, machine, parl, hover, definition, tokens, diagnostics")
 vim.cmd("qa!")

@@ -158,6 +158,49 @@ test("the generic LSP drives calc facts and features", async () => {
   }
 });
 
+test("the LSP drives advanced facts and cross-module definitions", async () => {
+  const advancedUri = pathToFileURL("/virtual/editor.advanced").href;
+  const source = [
+    "type Option(a) = None | Some(a)",
+    "let value = fn(option: Option(number)) => match option { None => 0, Some(number) => number } in",
+    "value(Some(3))",
+    "",
+  ].join("\n");
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const published = await client.open(advancedUri, source);
+    assert.deepEqual(published.params.diagnostics, []);
+
+    const hover = await client.request("textDocument/hover", {
+      textDocument: { uri: advancedUri },
+      position: { line: 2, character: 1 },
+    });
+    assert.match(hover.result.contents.value, /Option\(number\)/);
+
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri: advancedUri },
+      position: { line: 2, character: source.split("\n")[2]!.indexOf("Some") + 1 },
+    });
+    assert.equal(definition.result.range.start.line, 0);
+
+    const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: advancedUri } });
+    assert.ok(tokens.result.data.length > 0);
+
+    const completion = await client.request("textDocument/completion", {
+      textDocument: { uri: advancedUri },
+      position: { line: 0, character: 0 },
+    });
+    const labels = completion.result.map((item: Message) => item.label);
+    for (const label of ["type", "forall", "number", "boolean", "string"]) {
+      assert.ok(labels.includes(label), `missing completion ${label}: ${JSON.stringify(labels)}`);
+    }
+  } finally {
+    client.close();
+  }
+});
+
 test("the LSP publishes calc diagnostics on broken input", async () => {
   const client = new LspClient();
   try {

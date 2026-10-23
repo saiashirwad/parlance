@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { analyze, type AnyLanguage } from "../src/language.ts";
 import type { Mapping, TsDoc } from "../src/ts/template.ts";
+import { advanced } from "../examples/advanced/advanced.ts";
 import { calc } from "../examples/calc/calc.ts";
 import { schema } from "../examples/schema/schema.ts";
 import { machine } from "../examples/machine/machine.ts";
@@ -47,6 +48,13 @@ const surface = (name: string, language: AnyLanguage, source: string): number =>
 
 test("example language surfaces have valid, verbatim-accurate mappings", () => {
   const counts = [
+    surface(
+      "advanced",
+      advanced,
+      "type Option(a) = None | Some(a)\n"
+        + "let unwrap = fn(option: Option(number)) => match option { None => 0, Some(value) => value } in\n"
+        + "{ unwrap = unwrap }\n",
+    ),
     surface("calc", calc, load("../examples/calc/demo.calc")),
     surface("schema", schema, load("../examples/schema/blog.schema")),
     surface("machine", machine, load("../examples/machine/order.machine")),

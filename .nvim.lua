@@ -5,6 +5,7 @@ local root = vim.fs.dirname(vim.fn.fnamemodify(source, ":p"))
 
 vim.filetype.add({
   pattern = {
+    [vim.pesc(root) .. "/.*%.advanced"] = "advanced",
     [vim.pesc(root) .. "/.*%.calc"] = "calc",
     [vim.pesc(root) .. "/.*%.schema"] = "schema",
     [vim.pesc(root) .. "/.*%.machine"] = "machine",
@@ -15,7 +16,7 @@ vim.filetype.add({
 vim.lsp.config("parlance", {
   cmd = { "node", root .. "/src/lsp/cli.ts", "--config", root .. "/parlance.config.ts" },
   cmd_cwd = root,
-  filetypes = { "calc", "schema", "machine", "parl" },
+  filetypes = { "advanced", "calc", "schema", "machine", "parl" },
   workspace_required = true,
   root_dir = function(bufnr, on_dir)
     if vim.startswith(vim.api.nvim_buf_get_name(bufnr), root .. "/") then

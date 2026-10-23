@@ -45,7 +45,7 @@ Everything the project needs is read from that value:
 
 - `parlance lsp --config ./parlance.config.ts` serves every language.
 - `@parlance/ts-host` is one content mapper package for every project; the project supplies `options.config`.
-- `registerLanguages([calc])` installs Node loader hooks for every extension.
+- `registerLanguages([advanced, calc])` installs Node loader hooks for every extension.
 - `analyze(calc, source, uri)` is the entry point for editors and hosts. `analyzeParsed` takes a parse you already have, such as the LSP's incremental reparse.
 
 ## Stage 1: grammar
@@ -327,7 +327,7 @@ One package, `@parlance/ts-host`, for every project:
 {
   "contentMappers": [{
     "package": "@parlance/ts-host",
-    "extensions": [".calc", ".machine", ".schema"],
+    "extensions": [".advanced", ".calc", ".machine", ".schema"],
     "options": { "config": "./parlance.config.ts" }
   }]
 }
@@ -337,7 +337,7 @@ One package, `@parlance/ts-host`, for every project:
 
 ### Node loader
 
-`registerLanguages([calc, machine])` reads the extension registry, analyzes, checks diagnostics, and returns the runtime module. Diagnostics are rendered with line/column and context. The loader analyzes each load; it does not cache.
+`registerLanguages([advanced, calc, machine, schema])` reads the extension registry, analyzes, checks diagnostics, and returns the runtime module. Diagnostics are rendered with line/column and context. The loader analyzes each load; it does not cache.
 
 ### LSP
 
@@ -393,6 +393,7 @@ src/
 
 Examples prove each layer:
 
+- `examples/advanced` — ADTs, pattern matching, row-polymorphic records, higher-rank types, cross-file values and types, emitted JS, TS surface.
 - `examples/calc` — expression language, inferred types, emitted JS, TS surface.
 - `examples/machine` — domain checker (states/events), interpreted runtime, discriminated-union TS surface.
 - `examples/schema` — relational DSL, SQL target, interpreted SQLite runtime, TS surface.

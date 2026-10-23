@@ -32,15 +32,17 @@ const steps: readonly Step[] = [
     expect: ["self-host: compiled grammar parses itself"],
   },
   {
-    name: "check three example languages",
+    name: "check four example languages",
     command: [
       "./parlance",
       "check",
+      "examples/advanced/main.advanced",
       "examples/calc/demo.calc",
       "examples/schema/blog.schema",
       "examples/machine/order.machine",
     ],
     expect: [
+      "ok examples/advanced/main.advanced",
       "ok examples/calc/demo.calc",
       "ok examples/schema/blog.schema",
       "ok examples/machine/order.machine",
@@ -55,6 +57,11 @@ const steps: readonly Step[] = [
     name: "check the grammar language",
     command: ["./parlance", "check", "src/grammar/grammar.parl"],
     expect: ["ok src/grammar/grammar.parl"],
+  },
+  {
+    name: "run advanced through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/typescript/advanced.ts"],
+    expect: ["The answer is:\n49\n49 10 20 2 20 true 7"],
   },
   {
     name: "run calc through the Node loader",

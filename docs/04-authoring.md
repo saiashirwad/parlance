@@ -296,11 +296,12 @@ Install the loader once per process, before importing guest files:
 
 ```ts
 import { registerLanguages } from "parlance/ts/loader";
+import { advanced } from "./advanced/advanced.ts";
 import { calc } from "./calc/calc.ts";
 import { machine } from "./machine/machine.ts";
 import { schema } from "./schema/schema.ts";
 
-registerLanguages([calc, machine, schema]);
+registerLanguages([advanced, calc, machine, schema]);
 ```
 
 The loader reads a guest file from disk, analyzes it, and returns `language.runtime(ir)` as a module. It throws a `SyntaxError` with rendered guest positions when analysis reports any diagnostic, including a warning, or when the language has no `runtime`. A language without a runtime can still use the CLI and the content mapper.
@@ -345,11 +346,12 @@ Targets see checked IR, not source text. If a target needs a guest span, carry i
 Add the language to `parlance.config.ts` at the project root:
 
 ```ts
+import { advanced } from "./examples/advanced/advanced.ts";
 import { calc } from "./examples/calc/calc.ts";
 import { machine } from "./examples/machine/machine.ts";
 import { schema } from "./examples/schema/schema.ts";
 
-export default { languages: [calc, machine, schema] };
+export default { languages: [advanced, calc, machine, schema] };
 ```
 
 The config may default-export a `Language[]` or `{ languages }`. The CLI looks for `parlance.config.ts`, `.mts`, `.js`, or `.mjs` in the current directory, or takes `--config <path>`.
@@ -431,4 +433,4 @@ pnpm test
 pnpm check
 ```
 
-`pnpm test` runs `node --test tests/*.test.ts`. `pnpm check` runs the typecheck, the tests, all three example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation. A new language is ready when its grammar, checker, projection, runtime, targets, and LSP behavior each have a test on the path a user takes.
+`pnpm test` runs `node --test tests/*.test.ts`. `pnpm check` runs the typecheck, the tests, all four example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation. A new language is ready when its grammar, checker, projection, runtime, targets, and LSP behavior each have a test on the path a user takes.

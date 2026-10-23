@@ -1,7 +1,7 @@
 # Neovim
 
 Parlance ships one generic LSP. A project-local `.nvim.lua` registers it for
-`.calc`, `.schema`, `.machine`, and `.parl` files and enables semantic tokens. This is
+`.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` files and enables semantic tokens. This is
 the same project-local `exrc` pattern used by the older `langkit` checkout.
 
 ## Quick start
@@ -74,7 +74,7 @@ enabled.
 vim.lsp.config("parlance", {
   cmd = { "node", root .. "/src/lsp/cli.ts", "--config", root .. "/parlance.config.ts" },
   cmd_cwd = root,
-  filetypes = { "calc", "schema", "machine", "parl" },
+  filetypes = { "advanced", "calc", "schema", "machine", "parl" },
   workspace_required = true,
   root_dir = function(bufnr, on_dir)
     if vim.startswith(vim.api.nvim_buf_get_name(bufnr), root .. "/") then
@@ -101,7 +101,7 @@ Add a global `after/lsp/parlance.lua` (or a file sourced by your config). Set
 `parlance.config.ts`:
 
 ```lua
-vim.filetype.add({ extension = { calc = "calc", schema = "schema", machine = "machine", parl = "parl" } })
+vim.filetype.add({ extension = { advanced = "advanced", calc = "calc", schema = "schema", machine = "machine", parl = "parl" } })
 
 vim.lsp.config("parlance", {
   cmd = function(dispatchers, config)
@@ -111,7 +111,7 @@ vim.lsp.config("parlance", {
       "--config", root .. "/parlance.config.ts",
     }, dispatchers)
   end,
-  filetypes = { "calc", "schema", "machine", "parl" },
+  filetypes = { "advanced", "calc", "schema", "machine", "parl" },
   root_markers = { "parlance.config.ts" },
 })
 
@@ -147,18 +147,18 @@ Neovim through `exrc`, and runs the same assertions.
 
 Both assert:
 
-- `.calc`, `.schema`, `.machine`, and `.parl` attach to `parlance`.
+- `.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` attach to `parlance`.
 - Hover returns `number`; definition lands on line 1.
 - Semantic tokens are non-empty and the first token is a keyword.
 - Breaking the calc buffer publishes an `Expected number` diagnostic; fixing it
   clears the diagnostic.
-- Schema, machine, and grammar symbols appear.
+- Advanced, schema, machine, and grammar symbols appear; advanced hover shows an ADT.
 - Definition from `catalog.schema` reaches `User` in `blog.schema`; `.parl` root rules resolve.
 
 Passing output:
 
 ```
-ok nvim: calc, schema, machine, parl, hover, definition, tokens, diagnostics
+ok nvim: advanced, calc, schema, machine, parl, hover, definition, tokens, diagnostics
 ```
 
 ## Troubleshooting

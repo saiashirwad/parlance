@@ -13,20 +13,21 @@ Parlance is a toolkit for small languages that live inside TypeScript and Node. 
 ```sh
 pnpm install
 
-./parlance check examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine
+./parlance check examples/advanced/main.advanced examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine
 
 ./parlance check examples/schema/catalog.schema examples/calc/imports.calc
 
+node --import ./examples/register.ts examples/typescript/advanced.ts
 node --import ./examples/register.ts examples/typescript/calc.ts
 
 pnpm check
 ```
 
-The check prints one `ok` line per file. The Node command prints `250` from the `show` in `demo.calc`, then `250 125 true` from `examples/typescript/calc.ts`. `pnpm check` runs the typecheck, the tests, the three example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation into guest files.
+The check prints one `ok` line per file. The advanced command prints `The answer is:`, then `49` and the TypeScript consumer line `49 10 20 2 20 true 7`. The calc command prints `250` from the `show` in `demo.calc`, then `250 125 true` from `examples/typescript/calc.ts`. `pnpm check` runs the typecheck, the tests, the four example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation into guest files.
 
 ## Neovim
 
-The repository-local `.nvim.lua` registers one `parlance` client for `.calc`, `.schema`, `.machine`, and `.parl` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
+The repository-local `.nvim.lua` registers one `parlance` client for `.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
 
 See [`docs/06-neovim.md`](docs/06-neovim.md) for keymaps, a global config for other parlance projects, and troubleshooting.
 
@@ -56,6 +57,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 
 ## Examples
 
+- [`examples/advanced`](examples/advanced): a small functional language. Algebraic data types, exhaustive pattern matching, row-polymorphic records, let-generalization, explicit `forall`, and higher-rank arguments. A module body that returns a closed record exports each field, so a guest file imports typed values and constructors from another `.advanced` file. The TypeScript surface emits invariant ADT brands, generic constructor and value signatures, and cross-file type imports.
 - [`examples/calc`](examples/calc): expression language. Infers `number` and `boolean`, emits JavaScript directly, projects a TypeScript surface, and recovers after a malformed declaration.
 - [`examples/schema`](examples/schema): relational DSL. Checks models, enums, fields, references, and query results. Emits SQL, Drizzle, and Kysely targets, and runs queries through an interpreted `node:sqlite` runtime.
 - [`examples/machine`](examples/machine): state machine. Checks event and state legality, duplicate transitions, unreachable states, and a missing initial state. Projects a discriminated state and event union, and runs through an interpreted runtime.
@@ -77,12 +79,12 @@ Working:
 
 - `.parl` compilation with static checks, root-item recovery, and a self-hosted grammar.
 - Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, cross-file definition, references, and rename).
-- Cross-file imports through one `ModuleGraph`: schema and calc resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
+- Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step.
 - Named targets with `parlance emit`.
 - Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in about 20 ms, or 16% of a full parse, with 99,998 of 100,000 items reused. On a 50 KB file an edit plus analyze takes about 1.6 ms. The LSP uses it; the checker still runs over the whole file.
-- The calc, schema, and machine examples, exercised by `pnpm check`.
+- The advanced, calc, schema, and machine examples, exercised by `pnpm check`.
 
 Not built:
 

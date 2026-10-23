@@ -17,6 +17,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 
 const grammars = [
   { path: "src/grammar/grammar.parl", ast: null },
+  { path: "examples/advanced/advanced.parl", ast: "examples/advanced/advanced.ast.ts" },
   { path: "examples/calc/calc.parl", ast: "examples/calc/calc.ast.ts" },
   { path: "examples/schema/schema.parl", ast: "examples/schema/schema.ast.ts" },
   { path: "examples/machine/machine.parl", ast: "examples/machine/machine.ast.ts" },
