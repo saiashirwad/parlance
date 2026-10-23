@@ -259,19 +259,29 @@ const relex = (
   });
 
   const tailFrom = resyncBase + 1;
-  const tailTokens = tailFrom === 0 || tailFrom >= old.length
-    ? []
-    : delta === 0
-    ? old.slice(tailFrom)
-    : old.slice(tailFrom).map((token) => shiftToken(token, delta));
+  let tailTokens: readonly LexToken[];
+  if (tailFrom <= 0 || tailFrom >= old.length) {
+    tailTokens = [];
+  } else if (delta === 0) {
+    tailTokens = old.slice(tailFrom);
+  } else {
+    const tail = new Array<LexToken>(old.length - tailFrom);
+    for (let index = 0; index < tail.length; index++) tail[index] = shiftToken(old[tailFrom + index]!, delta);
+    tailTokens = tail;
+  }
   const tokens = old.slice(0, prefixCount).concat(run.tokens, tailTokens);
 
   const prefixTrivia = previous.trivia.slice(0, countTriviaEndsBy(previous.trivia, restartOffset));
   let tailTrivia: readonly Trivia[] = [];
   if (tailFrom > 0 && tailFrom < old.length) {
     const from = countTriviaStartsBefore(previous.trivia, old[tailFrom - 1]!.span.end);
-    tailTrivia = previous.trivia.slice(from);
-    if (delta !== 0) tailTrivia = tailTrivia.map((entry) => shiftTrivia(entry, delta));
+    if (delta === 0) {
+      tailTrivia = previous.trivia.slice(from);
+    } else {
+      const tail = new Array<Trivia>(previous.trivia.length - from);
+      for (let index = 0; index < tail.length; index++) tail[index] = shiftTrivia(previous.trivia[from + index]!, delta);
+      tailTrivia = tail;
+    }
   }
   const trivia = prefixTrivia.concat(run.trivia, tailTrivia);
   return { tokens, trivia };
@@ -414,7 +424,9 @@ export const reparse = <A>(
         for (const child of value) shift(child);
         return value;
       }
-      return value.map(shift);
+      const copy = new Array<unknown>(value.length);
+      for (let index = 0; index < value.length; index++) copy[index] = shift(value[index]);
+      return copy;
     }
     if (value === null || typeof value !== "object") return value;
     const record = value as Record<string, unknown>;
@@ -426,12 +438,16 @@ export const reparse = <A>(
       }
       return { ...record, start: mapOffset(record.start), end: mapOffset(record.end) };
     }
+    const keys = Object.keys(record);
     if (options.mutate) {
-      for (const child of Object.values(record)) shift(child);
+      for (let index = 0; index < keys.length; index++) shift(record[keys[index]!]);
       return record;
     }
     const clone: Record<string, unknown> = {};
-    for (const [key, child] of Object.entries(record)) clone[key] = shift(child);
+    for (let index = 0; index < keys.length; index++) {
+      const key = keys[index]!;
+      clone[key] = shift(record[key]);
+    }
     return clone;
   };
   // A zero-length delta leaves every reused span in place. Reuse the nodes
