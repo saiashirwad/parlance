@@ -2,3 +2,4 @@ node_modules
 .parlance
 *.tsbuildinfo
 .DS_Store
+.opencode/skills/verify-parlance/evidence/
