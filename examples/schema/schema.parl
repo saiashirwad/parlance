@@ -17,6 +17,9 @@ rule Decl = {
   | Enum
   | Model
   | Query
+  | Insert
+  | Update
+  | Delete
 };
 
 rule Enum = {
@@ -42,7 +45,16 @@ rule Base = {
 };
 
 rule Attribute = {
-  @attribute "@" name:Name
+  @attribute "@" name:Name args:AttributeArgs?
+};
+
+rule AttributeArgs = {
+  "(" value:DefaultValue ")"
+};
+
+rule DefaultValue = {
+  | @defaultName name:Name
+  | @defaultLiteral value:Literal
 };
 
 rule Query = {
@@ -51,6 +63,41 @@ rule Query = {
 
 rule Param = {
   @param name:Name ":" type:TypeRef
+};
+
+rule Insert = {
+  @insert "insert" model:Name "{" assignments:sepEnd(InsertAssignment, ",") "}" ";"?
+};
+
+rule InsertAssignment = {
+  @insertAssignment field:Name ":" value:MutationValue
+};
+
+rule Update = {
+  @update "update" model:Name stages:UpdateStage* ";"?
+};
+
+rule UpdateStage = {
+  | @updateWhere "|>" "where" field:Name "==" value:MutationValue
+  | @updateSet "|>" "set" assignments:sep1(SetAssignment, ",")
+};
+
+rule SetAssignment = {
+  @setAssignment field:Name "=" value:MutationValue
+};
+
+rule Delete = {
+  @delete "delete" model:Name stages:DeleteStage* ";"?
+};
+
+rule DeleteStage = {
+  @deleteWhere "|>" "where" field:Name "==" value:MutationValue
+};
+
+rule MutationValue = {
+  | @bind "$" name:Name
+  | @literal value:Literal
+  | @name name:Name
 };
 
 rule Stage = {

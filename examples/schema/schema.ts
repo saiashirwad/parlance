@@ -9,16 +9,21 @@ import { source, ts } from "../../src/ts/index.ts";
 import type {
   Attribute,
   Base,
+  DefaultValue,
+  Delete,
   Direction,
   Enum,
   Field,
   File,
+  Insert,
   Literal,
   Model,
+  MutationValue,
   Param,
   Query,
   Stage,
   TypeRef,
+  Update,
   Value,
 } from "./schema.ast.ts";
 
@@ -43,15 +48,28 @@ type SchemaType =
   | { readonly kind: "enum"; readonly name: string; readonly members: readonly string[] }
   | { readonly kind: "model"; readonly name: string };
 
+type MutationKind = "insert" | "update" | "delete";
+
+type MutationSignature = {
+  readonly kind: "mutation";
+  readonly mutation: MutationKind;
+  readonly model: string;
+  readonly params: readonly ParamIR[];
+};
+
 type QuerySignature = {
   readonly kind: "query";
   readonly params: readonly ParamIR[];
   readonly result: ResultIR;
 };
 
-type Checked = SchemaType | QuerySignature;
+type Checked = SchemaType | QuerySignature | MutationSignature;
 
 type TypeRefValue = { readonly base: Base; readonly list: boolean; readonly nullable: boolean };
+
+type DefaultIR =
+  | { readonly kind: "now" }
+  | { readonly kind: "literal"; readonly value: string | number };
 
 type FieldIR = {
   readonly name: Text;
@@ -61,6 +79,7 @@ type FieldIR = {
   readonly primary: boolean;
   readonly auto: boolean;
   readonly unique: boolean;
+  readonly defaultValue: DefaultIR | null;
   readonly binding: Binding<Checked>;
 };
 
@@ -82,6 +101,7 @@ type ParamIR = {
   readonly typeName: Text;
   readonly type: SchemaType;
   readonly nullable: boolean;
+  readonly optional: boolean;
   readonly binding: Binding<Checked>;
 };
 
@@ -111,11 +131,33 @@ type QueryIR = {
   readonly binding: Binding<Checked>;
 };
 
+type MutationAssignmentIR = {
+  readonly field: FieldIR;
+  readonly bound: Bound;
+};
+
+type OptionalFieldIR = {
+  readonly field: FieldIR;
+  readonly bound: Bound;
+};
+
+type MutationIR = {
+  readonly kind: MutationKind;
+  readonly name: Text;
+  readonly model: ModelIR;
+  readonly params: readonly ParamIR[];
+  readonly assignments: readonly MutationAssignmentIR[];
+  readonly where: readonly MutationAssignmentIR[];
+  readonly optional: readonly OptionalFieldIR[];
+  readonly binding: Binding<Checked>;
+};
+
 export type SchemaModule = {
   readonly name: Text;
   readonly enums: readonly EnumIR[];
   readonly models: readonly ModelIR[];
   readonly queries: readonly QueryIR[];
+  readonly mutations: readonly MutationIR[];
 };
 
 const refValue = (ref: TypeRef): TypeRefValue => {
@@ -161,8 +203,13 @@ const decodeString = (raw: string): string => {
 
 const schemaTypeText = (type: SchemaType): string => type.name;
 
-const signatureText = (signature: QuerySignature): string => {
-  const params = signature.params.map((param) => `${param.name.text}: ${schemaTypeText(param.type)}${param.nullable ? "?" : ""}`);
+const signatureText = (signature: QuerySignature | MutationSignature): string => {
+  const params = signature.params.map((param) =>
+    `${param.name.text}: ${schemaTypeText(param.type)}${param.nullable ? "?" : ""}${param.optional ? " =" : ""}`
+  );
+  if (signature.kind === "mutation") {
+    return `${signature.mutation} ${signature.model}(${params.join(", ")}) -> Int`;
+  }
   const result = signature.result.type.kind === "scalar" && signature.result.type.name === "Int"
     ? "Int"
     : `${signature.result.type.name}${signature.result.list ? "[]" : ""}${signature.result.nullable ? "?" : ""}`;
@@ -173,10 +220,11 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
   const enums = new Map<string, Enum>();
   const models = new Map<string, Model>();
   const queries = new Map<string, Query>();
+  const mutations: (Insert | Update | Delete)[] = [];
   const bindings = new Map<string, Binding<Checked>>();
   const names = new Set<string>();
 
-  const claim = (name: Text, kind: "enum" | "model" | "query", type?: Checked) => {
+  const claim = (name: Text, kind: "enum" | "model" | "query" | "mutation", type?: Checked) => {
     if (names.has(name.text)) {
       cx.error(`Duplicate declaration ${JSON.stringify(name.text)}`, name);
       return undefined;
@@ -209,9 +257,11 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     } else if (declaration.kind === "model") {
       models.set(declaration.name.text, declaration);
       claim(declaration.name, "model", { kind: "model", name: declaration.name.text });
-    } else {
+    } else if (declaration.kind === "query") {
       queries.set(declaration.name.text, declaration);
       claim(declaration.name, "query");
+    } else {
+      mutations.push(declaration);
     }
   }
 
@@ -244,6 +294,57 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     enumIRs.push({ name: declaration.name, members, binding });
   }
 
+  const checkDefault = (
+    value: DefaultValue,
+    type: SchemaType,
+    attribute: Attribute,
+  ): DefaultIR | undefined => {
+    if (type.kind === "model") {
+      cx.error("Model fields cannot have defaults", attribute);
+      return undefined;
+    }
+    if (value.kind === "defaultName") {
+      const name = value.name;
+      if (name.text === "now") {
+        if (type.kind === "scalar" && type.name === "DateTime") {
+          cx.typed(name, type);
+          return { kind: "now" };
+        }
+        cx.error("@default(now) is only valid for DateTime", name);
+        return undefined;
+      }
+      if (type.kind === "scalar" && type.name === "Bool" && (name.text === "true" || name.text === "false")) {
+        cx.typed(name, type);
+        return { kind: "literal", value: name.text === "true" ? 1 : 0 };
+      }
+      if (type.kind === "enum") {
+        const member = enumMembers.get(type.name)?.get(name.text);
+        if (member) {
+          cx.reference(member, name);
+          cx.typed(name, type);
+          return { kind: "literal", value: name.text };
+        }
+        cx.error(`Unknown enum member ${JSON.stringify(name.text)}`, name);
+        return undefined;
+      }
+      cx.error(`Unknown default ${JSON.stringify(name.text)}`, name);
+      return undefined;
+    }
+    if (type.kind === "scalar" && type.name === "Int" && value.value.kind === "number") {
+      cx.typed(value, type);
+      return { kind: "literal", value: Number(value.value.value.text) };
+    }
+    if (
+      type.kind === "scalar" && (type.name === "String" || type.name === "DateTime")
+      && value.value.kind === "string"
+    ) {
+      cx.typed(value, type);
+      return { kind: "literal", value: decodeString(value.value.value.text) };
+    }
+    cx.error(`Expected a ${schemaTypeText(type)} default, found a different literal`, value.value);
+    return undefined;
+  };
+
   const modelFields = new Map<string, Map<string, FieldIR>>();
   const modelIRs: ModelIR[] = [];
   for (const declaration of models.values()) {
@@ -263,17 +364,21 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       const type = resolveBase(resolved.base, enums, models, cx);
       if (!type) continue;
-      const attributes = new Set<string>();
+      const attributes = new Map<string, Attribute>();
       for (const attribute of field.attributes) {
         if (attributes.has(attribute.name.text)) {
           cx.error(`Duplicate attribute @${attribute.name.text}`, attribute.name);
           continue;
         }
-        attributes.add(attribute.name.text);
+        attributes.set(attribute.name.text, attribute);
       }
-      for (const name of attributes) {
-        if (!["primary", "auto", "unique"].includes(name)) {
-          cx.error(`Unknown attribute @${name}`, field.name);
+      for (const [name, attribute] of attributes) {
+        if (!["primary", "auto", "unique", "default"].includes(name)) {
+          cx.error(`Unknown attribute @${name}`, attribute.name);
+          continue;
+        }
+        if (name !== "default" && attribute.args) {
+          cx.error(`@${name} does not take an argument`, attribute.args);
         }
       }
       const primaryFlag = attributes.has("primary");
@@ -286,6 +391,17 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       if (auto && !primaryFlag) cx.error("@auto requires @primary", field.name);
       if (auto && type.kind === "scalar" && type.name !== "Int") cx.error("@auto requires an Int field", field.type);
+      const defaultAttribute = attributes.get("default");
+      let defaultValue: DefaultIR | null = null;
+      if (defaultAttribute) {
+        if (primaryFlag || auto) {
+          cx.error("Defaults are not allowed on @primary or @auto fields", defaultAttribute);
+        } else if (!defaultAttribute.args) {
+          cx.error("@default needs an argument", defaultAttribute.name);
+        } else {
+          defaultValue = checkDefault(defaultAttribute.args, type, defaultAttribute) ?? null;
+        }
+      }
       if (primaryFlag) {
         if (primary) cx.error("A model can have only one @primary field", field.name);
         else {
@@ -300,6 +416,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
             primary: true,
             auto,
             unique,
+            defaultValue,
             binding,
           };
           primary = value;
@@ -320,6 +437,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         primary: false,
         auto,
         unique,
+        defaultValue,
         binding,
       });
       cx.typed(field.name, type);
@@ -382,6 +500,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         typeName: resolved.base.name,
         type,
         nullable: resolved.nullable,
+        optional: false,
         binding: paramBinding,
       } satisfies ParamIR;
     };
@@ -394,7 +513,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       if (value.kind === "paramRef") {
         const name = value.value;
         const param = scope.get(name.text);
-        if (param && param.type && param.type.kind !== "query") {
+        if (param && param.type && param.type.kind !== "query" && param.type.kind !== "mutation") {
           if (!sameType(param.type, expected)) {
             cx.error(
               `Cannot compare ${schemaTypeText(expected)} with ${schemaTypeText(param.type)}`,
@@ -544,12 +663,271 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     queryIRs.push(built);
   }
 
+  const modelByName = new Map(modelIRs.map((model) => [model.name.text, model]));
+  const mutationIRs: MutationIR[] = [];
+
+  for (const declaration of mutations) {
+    const kind = declaration.kind;
+    const model = modelByName.get(declaration.model.text);
+    if (!model) {
+      cx.error(`Unknown model ${JSON.stringify(declaration.model.text)}`, declaration.model);
+      continue;
+    }
+    cx.resolve(model.name.text, declaration.model);
+    const fields = modelFields.get(model.name.text)!;
+    const params: ParamIR[] = [];
+    const paramMap = new Map<string, ParamIR>();
+    let sqlCounter = 0;
+    const nextSqlName = () => `v${sqlCounter++}`;
+
+    const paramOf = (name: Text, field: FieldIR): ParamIR | undefined => {
+      const existing = paramMap.get(name.text);
+      if (existing) {
+        if (!sameType(existing.type, field.type)) {
+          cx.error(
+            `Parameter ${JSON.stringify(name.text)} is used for both ${schemaTypeText(existing.type)} and ${
+              schemaTypeText(field.type)
+            }`,
+            name,
+          );
+          return undefined;
+        }
+        cx.reference(existing.binding, name);
+        cx.typed(name, field.type);
+        return existing;
+      }
+      const binding = cx.declare(name.text, name.span, "parameter", field.type, { detail: "parameter" });
+      cx.bind(binding);
+      cx.typed(name, field.type);
+      const param: ParamIR = {
+        name,
+        typeName: field.typeName,
+        type: field.type,
+        nullable: field.nullable,
+        optional: false,
+        binding,
+      };
+      paramMap.set(name.text, param);
+      params.push(param);
+      return param;
+    };
+
+    const valueOf = (value: MutationValue, field: FieldIR): Bound | undefined => {
+      if (value.kind === "bind") {
+        const param = paramOf(value.name, field);
+        return param ? { sqlName: nextSqlName(), kind: "param", name: param.name.text } : undefined;
+      }
+      if (value.kind === "literal") {
+        if (field.type.kind === "scalar" && field.type.name === "Int" && value.value.kind === "number") {
+          cx.typed(value, field.type);
+          return { sqlName: nextSqlName(), kind: "literal", value: Number(value.value.value.text) };
+        }
+        if (field.type.kind === "model" && value.value.kind === "number") {
+          cx.typed(value, field.type);
+          return { sqlName: nextSqlName(), kind: "literal", value: Number(value.value.value.text) };
+        }
+        if (
+          field.type.kind === "scalar" && (field.type.name === "String" || field.type.name === "DateTime")
+          && value.value.kind === "string"
+        ) {
+          cx.typed(value, field.type);
+          return { sqlName: nextSqlName(), kind: "literal", value: decodeString(value.value.value.text) };
+        }
+        if (field.type.kind === "enum" && value.value.kind === "string") {
+          const decoded = decodeString(value.value.value.text);
+          const member = enumMembers.get(field.type.name)?.get(decoded);
+          if (member) {
+            cx.reference(member, value.value.value);
+            cx.typed(value, field.type);
+            return { sqlName: nextSqlName(), kind: "literal", value: decoded };
+          }
+        }
+        cx.error(`Expected ${schemaTypeText(field.type)}, found a different literal`, value.value);
+        return undefined;
+      }
+      const name = value.name;
+      if (field.type.kind === "enum") {
+        const member = enumMembers.get(field.type.name)?.get(name.text);
+        if (member) {
+          cx.reference(member, name);
+          cx.typed(name, field.type);
+          return { sqlName: nextSqlName(), kind: "literal", value: name.text };
+        }
+        cx.error(`Unknown enum member ${JSON.stringify(name.text)}`, name);
+        return undefined;
+      }
+      if (field.type.kind === "scalar" && field.type.name === "Bool") {
+        if (name.text === "true" || name.text === "false") {
+          cx.typed(name, field.type);
+          return { sqlName: nextSqlName(), kind: "literal", value: name.text === "true" ? 1 : 0 };
+        }
+        cx.error("Expected Bool, found a name", name);
+        return undefined;
+      }
+      cx.error(`Expected ${schemaTypeText(field.type)}, found ${JSON.stringify(name.text)}`, name);
+      return undefined;
+    };
+
+    const claimMutation = (signature: MutationSignature): Binding<Checked> | undefined => {
+      const name: Text = { text: `${kind}${model.name.text}`, span: declaration.model.span };
+      return claim(name, "mutation", signature);
+    };
+
+    let assignments: MutationAssignmentIR[] = [];
+    let where: MutationAssignmentIR[] = [];
+    let optional: OptionalFieldIR[] = [];
+    let sawWhere = false;
+    let sawSet = false;
+
+    if (declaration.kind === "insert") {
+      const assigned = new Map<string, MutationAssignmentIR>();
+      const mentioned = new Set<string>();
+      for (const assignment of declaration.assignments) {
+        const field = fields.get(assignment.field.text);
+        if (!field) {
+          cx.error(`Unknown field ${JSON.stringify(assignment.field.text)}`, assignment.field);
+          continue;
+        }
+        mentioned.add(field.name.text);
+        if (assigned.has(field.name.text)) {
+          cx.error(`Duplicate assignment to ${JSON.stringify(field.name.text)}`, assignment.field);
+          continue;
+        }
+        if (field.auto) {
+          cx.error(`The @auto primary field ${JSON.stringify(field.name.text)} is generated; omit it`, assignment.field);
+          continue;
+        }
+        cx.reference(field.binding, assignment.field);
+        cx.typed(assignment.field, field.type);
+        const bound = valueOf(assignment.value, field);
+        if (bound) assigned.set(field.name.text, { field, bound });
+      }
+      assignments = model.fields.flatMap((field) => {
+        const found = assigned.get(field.name.text);
+        return found ? [found] : [];
+      });
+      for (const field of model.fields) {
+        if (mentioned.has(field.name.text) || field.auto) continue;
+        if (!field.nullable && !field.defaultValue) {
+          cx.error(
+            `Insert ${model.name.text} is missing required field ${JSON.stringify(field.name.text)}`,
+            declaration.model,
+          );
+          continue;
+        }
+        if (paramMap.has(field.name.text)) {
+          cx.error(
+            `Optional insert field ${JSON.stringify(field.name.text)} collides with parameter ${
+              JSON.stringify(field.name.text)
+            }`,
+            field.name,
+          );
+          continue;
+        }
+        optional.push({
+          field,
+          bound: { sqlName: nextSqlName(), kind: "param", name: field.name.text },
+        });
+      }
+    } else if (declaration.kind === "update") {
+      const whereMap = new Map<string, MutationAssignmentIR>();
+      const setMap = new Map<string, MutationAssignmentIR>();
+      for (const stage of declaration.stages) {
+        if (stage.kind === "updateWhere") {
+          sawWhere = true;
+          const field = fields.get(stage.field.text);
+          if (!field) {
+            cx.error(`Unknown field ${JSON.stringify(stage.field.text)}`, stage.field);
+            continue;
+          }
+          if (whereMap.has(field.name.text)) {
+            cx.error(`Duplicate where field ${JSON.stringify(field.name.text)}`, stage.field);
+            continue;
+          }
+          cx.reference(field.binding, stage.field);
+          cx.typed(stage.field, field.type);
+          const bound = valueOf(stage.value, field);
+          if (bound) whereMap.set(field.name.text, { field, bound });
+        } else {
+          sawSet = true;
+          for (const assignment of stage.assignments) {
+            const field = fields.get(assignment.field.text);
+            if (!field) {
+              cx.error(`Unknown field ${JSON.stringify(assignment.field.text)}`, assignment.field);
+              continue;
+            }
+            if (setMap.has(field.name.text)) {
+              cx.error(`Duplicate assignment to ${JSON.stringify(field.name.text)}`, assignment.field);
+              continue;
+            }
+            if (field.primary) {
+              cx.error(`The @primary field ${JSON.stringify(field.name.text)} cannot be updated`, assignment.field);
+              continue;
+            }
+            cx.reference(field.binding, assignment.field);
+            cx.typed(assignment.field, field.type);
+            const bound = valueOf(assignment.value, field);
+            if (bound) setMap.set(field.name.text, { field, bound });
+          }
+        }
+      }
+      where = model.fields.flatMap((field) => {
+        const found = whereMap.get(field.name.text);
+        return found ? [found] : [];
+      });
+      assignments = model.fields.flatMap((field) => {
+        const found = setMap.get(field.name.text);
+        return found ? [found] : [];
+      });
+      if (!sawWhere) cx.error(`Update ${model.name.text} needs a where stage`, declaration.model);
+      if (!sawSet) cx.error(`Update ${model.name.text} needs a set stage`, declaration.model);
+    } else {
+      const whereMap = new Map<string, MutationAssignmentIR>();
+      for (const stage of declaration.stages) {
+        sawWhere = true;
+        const field = fields.get(stage.field.text);
+        if (!field) {
+          cx.error(`Unknown field ${JSON.stringify(stage.field.text)}`, stage.field);
+          continue;
+        }
+        if (whereMap.has(field.name.text)) {
+          cx.error(`Duplicate where field ${JSON.stringify(field.name.text)}`, stage.field);
+          continue;
+        }
+        cx.reference(field.binding, stage.field);
+        cx.typed(stage.field, field.type);
+        const bound = valueOf(stage.value, field);
+        if (bound) whereMap.set(field.name.text, { field, bound });
+      }
+      where = model.fields.flatMap((field) => {
+        const found = whereMap.get(field.name.text);
+        return found ? [found] : [];
+      });
+      if (!sawWhere) cx.error(`Delete ${model.name.text} needs a where stage`, declaration.model);
+    }
+
+    const signature: MutationSignature = { kind: "mutation", mutation: kind, model: model.name.text, params };
+    const binding = claimMutation(signature);
+    if (!binding) continue;
+    mutationIRs.push({
+      kind,
+      name: { text: binding.name, span: binding.span },
+      model,
+      params,
+      assignments,
+      where,
+      optional,
+      binding,
+    });
+  }
+
   // Bindings are created in hoisting order and scopes are already closed; nothing else to release.
   const module: SchemaModule = {
     name: file.name,
     enums: enumIRs,
     models: modelIRs,
     queries: queryIRs,
+    mutations: mutationIRs,
   };
   return module;
 };
@@ -578,7 +956,7 @@ const valueTs = (type: SchemaType): string => {
 };
 
 const paramTs = (param: ParamIR): string => {
-  const base = param.type.kind === "scalar" ? valueTs(param.type) : param.type.name;
+  const base = param.type.kind === "model" ? "number" : valueTs(param.type);
   return param.nullable ? `${base} | null` : base;
 };
 
@@ -586,6 +964,37 @@ const resultTs = (result: ResultIR): string => {
   const base = valueTs(result.type);
   if (result.list) return `readonly ${base}[]`;
   return result.nullable ? `${base} | undefined` : base;
+};
+
+const paramObjectTs = (params: readonly ParamIR[]): string =>
+  `{ ${params.map((param) => `readonly ${param.name.text}: ${paramTs(param)}; `).join("")}}`;
+
+const mutationParams = (mutation: MutationIR, assignments: readonly MutationAssignmentIR[]): readonly ParamIR[] => {
+  const found: ParamIR[] = [];
+  for (const assignment of assignments) {
+    const bound = assignment.bound;
+    if (bound.kind !== "param") continue;
+    const param = mutation.params.find((entry) => entry.name.text === bound.name);
+    if (param && !found.some((entry) => entry.name.text === param.name.text)) found.push(param);
+  }
+  return found;
+};
+
+const mutationTs = (mutation: MutationIR): string => {
+  const name = mutation.name.text;
+  if (mutation.kind === "insert") {
+    const params = [
+      ...mutation.params.map((param) => `readonly ${param.name.text}: ${paramTs(param)}; `),
+      ...mutation.optional.map((entry) => `readonly ${entry.field.name.text}?: ${fieldTs(entry.field)}; `),
+    ].join("");
+    return `  ${name}(params: { ${params}}): number;\n`;
+  }
+  if (mutation.kind === "update") {
+    return `  ${name}(params: { readonly where: ${
+      paramObjectTs(mutationParams(mutation, mutation.where))
+    }; readonly set: ${paramObjectTs(mutationParams(mutation, mutation.assignments))} }): number;\n`;
+  }
+  return `  ${name}(params: ${paramObjectTs(mutationParams(mutation, mutation.where))}): number;\n`;
 };
 
 const types = (module: SchemaModule) => ts`${
@@ -617,20 +1026,33 @@ ${
     }): ${resultTs(query.result)};
 `
   )
+}${
+  module.mutations.map((mutation) => mutationTs(mutation))
 }}
 export declare const sql: string;
 export declare function open(database?: string): Database;
 `;
+
+type RuntimeBinding =
+  | { readonly sqlName: string; readonly kind: "param"; readonly name: string }
+  | { readonly sqlName: string; readonly kind: "literal"; readonly value: string | number };
 
 type RuntimeQuery = {
   readonly name: string;
   readonly sql: string;
   readonly kind: "first" | "all" | "count";
   readonly params: readonly string[];
-  readonly bindings: readonly (
-    | { readonly name: string; readonly kind: "param" }
-    | { readonly name: string; readonly kind: "literal"; readonly value: string | number }
-  )[];
+  readonly bindings: readonly RuntimeBinding[];
+};
+
+type RuntimeMutation = {
+  readonly name: string;
+  readonly kind: MutationKind;
+  readonly sql: string;
+  readonly params: readonly string[];
+  readonly bindings: readonly RuntimeBinding[];
+  readonly table: string | null;
+  readonly columns: readonly (RuntimeBinding & { readonly column: string; readonly optional: boolean })[];
 };
 
 const quote = (name: string): string => `"${name.replaceAll("\"", "\"\"")}"`;
@@ -639,6 +1061,11 @@ const sqlType = (type: SchemaType): string => {
   if (type.kind === "scalar") return type.name === "Int" || type.name === "Bool" ? "INTEGER" : "TEXT";
   if (type.kind === "enum") return "TEXT";
   return "INTEGER";
+};
+
+const defaultSql = (value: DefaultIR): string => {
+  if (value.kind === "now") return "CURRENT_TIMESTAMP";
+  return typeof value.value === "string" ? `'${value.value.replaceAll("'", "''")}'` : String(value.value);
 };
 
 const ddl = (module: SchemaModule): string =>
@@ -651,6 +1078,7 @@ const ddl = (module: SchemaModule): string =>
       }
       if (!field.nullable && !field.primary) parts.push("NOT NULL");
       if (field.unique && !field.primary) parts.push("UNIQUE");
+      if (field.defaultValue) parts.push(`DEFAULT ${defaultSql(field.defaultValue)}`);
       if (field.type.kind === "model") {
         const target = module.models.find((entry) => entry.name.text === field.type.name);
         if (target?.primary) {
@@ -699,15 +1127,15 @@ const queryKind = (query: QueryIR): "first" | "all" | "count" => {
   return terminal?.kind === "terminal" ? terminal.terminal : "all";
 };
 
+const asRuntimeBinding = (bound: Bound): RuntimeBinding => bound.kind === "param"
+  ? { sqlName: bound.sqlName, kind: "param", name: bound.name }
+  : { sqlName: bound.sqlName, kind: "literal", value: bound.value };
+
 const runtimeQueries = (module: SchemaModule): RuntimeQuery[] =>
   module.queries.map((query) => {
-    const bindings: RuntimeQuery["bindings"][number][] = [];
+    const bindings: RuntimeBinding[] = [];
     for (const stage of query.stages) {
-      if (stage.kind === "where" || stage.kind === "limit") {
-        bindings.push(stage.bound.kind === "param"
-          ? { name: stage.bound.sqlName, kind: "param" }
-          : { name: stage.bound.sqlName, kind: "literal", value: stage.bound.value });
-      }
+      if (stage.kind === "where" || stage.kind === "limit") bindings.push(asRuntimeBinding(stage.bound));
     }
     return {
       name: query.name.text,
@@ -718,9 +1146,62 @@ const runtimeQueries = (module: SchemaModule): RuntimeQuery[] =>
     };
   });
 
+const mutationSql = (mutation: MutationIR): string => {
+  const table = quote(mutation.model.name.text);
+  if (mutation.kind === "insert") {
+    if (mutation.assignments.length === 0) return `INSERT INTO ${table} DEFAULT VALUES`;
+    return `INSERT INTO ${table} (${
+      mutation.assignments.map((entry) => quote(entry.field.name.text)).join(", ")
+    }) VALUES (${mutation.assignments.map((entry) => `:${entry.bound.sqlName}`).join(", ")})`;
+  }
+  const where = mutation.where.map((entry) => `${quote(entry.field.name.text)} = :${entry.bound.sqlName}`)
+    .join(" AND ");
+  if (mutation.kind === "update") {
+    const set = mutation.assignments.map((entry) => `${quote(entry.field.name.text)} = :${entry.bound.sqlName}`)
+      .join(", ");
+    return `UPDATE ${table}\nSET ${set}\nWHERE ${where}`;
+  }
+  return `DELETE FROM ${table}\nWHERE ${where}`;
+};
+
+const runtimeMutations = (module: SchemaModule): RuntimeMutation[] =>
+  module.mutations.map((mutation) => {
+    const columns: RuntimeMutation["columns"][number][] = [];
+    if (mutation.kind === "insert") {
+      const assigned = new Map(mutation.assignments.map((entry) => [entry.field.name.text, entry]));
+      const optional = new Map(mutation.optional.map((entry) => [entry.field.name.text, entry]));
+      for (const field of mutation.model.fields) {
+        const entry = assigned.get(field.name.text);
+        if (entry) {
+          columns.push({ ...asRuntimeBinding(entry.bound), column: field.name.text, optional: false });
+          continue;
+        }
+        const fallback = optional.get(field.name.text);
+        if (fallback) {
+          columns.push({ ...asRuntimeBinding(fallback.bound), column: field.name.text, optional: true });
+        }
+      }
+    }
+    const bindings = mutation.kind === "insert"
+      ? columns.filter((column) => !column.optional).map(({ column, optional, ...binding }) => binding)
+      : [...mutation.assignments, ...mutation.where].map((entry) => asRuntimeBinding(entry.bound));
+    return {
+      name: mutation.name.text,
+      kind: mutation.kind,
+      sql: mutationSql(mutation),
+      params: [
+        ...mutation.params.map((param) => param.name.text),
+        ...mutation.optional.map((entry) => entry.field.name.text),
+      ],
+      bindings,
+      table: mutation.kind === "insert" ? mutation.model.name.text : null,
+      columns,
+    };
+  });
+
 const runtime = (module: SchemaModule): string =>
   runtimeModule({
-    data: { ddl: ddl(module), queries: runtimeQueries(module) },
+    data: { ddl: ddl(module), queries: runtimeQueries(module), mutations: runtimeMutations(module) },
     from: new URL("./runtime.ts", import.meta.url).href,
     imports: ["create"],
     factory: "create(data)",
@@ -735,6 +1216,7 @@ const sql = (module: SchemaModule): string => [
   ddl(module),
   "",
   ...module.queries.map((query) => `-- ${query.name.text}\n${querySql(module, query)};`),
+  ...module.mutations.map((mutation) => `\n-- ${mutation.name.text}\n${mutationSql(mutation)};`),
   "",
 ].join("\n");
 
@@ -765,6 +1247,16 @@ const drizzle = (module: SchemaModule): string => {
       if (field.primary) chain.push(field.auto ? ".primaryKey({ autoIncrement: true })" : ".primaryKey()");
       if (!field.nullable && !field.primary) chain.push(".notNull()");
       if (field.unique && !field.primary) chain.push(".unique()");
+      if (field.defaultValue) {
+        if (field.defaultValue.kind === "now") chain.push(".default(sql`CURRENT_TIMESTAMP`)");
+        else if (field.type.kind === "scalar" && field.type.name === "Bool") {
+          chain.push(`.default(${field.defaultValue.value === 1 ? "true" : "false"})`);
+        } else if (typeof field.defaultValue.value === "string") {
+          chain.push(`.default(${JSON.stringify(field.defaultValue.value)})`);
+        } else {
+          chain.push(`.default(${field.defaultValue.value})`);
+        }
+      }
       if (field.type.kind === "model") {
         const target = names.get(field.type.name);
         if (target) chain.push(`.references(() => ${target}.${module.models.find((entry) => entry.name.text === field.type.name)?.primary?.name.text ?? "id"})`);
@@ -773,7 +1265,9 @@ const drizzle = (module: SchemaModule): string => {
     });
     return `export const ${names.get(model.name.text)} = sqliteTable(${JSON.stringify(model.name.text)}, {\n${columns.join("\n")}\n});`;
   });
+  const usesNow = module.models.some((model) => model.fields.some((field) => field.defaultValue?.kind === "now"));
   return [
+    ...(usesNow ? [`import { sql } from "drizzle-orm";`] : []),
     `import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";`,
     "",
     ...enums,
@@ -804,7 +1298,9 @@ const kysely = (module: SchemaModule): string => [
           : field.type.name === "Bool"
           ? "number"
           : "string";
-        const type = field.primary && field.auto ? `Generated<${base}>` : field.nullable ? `${base} | null` : base;
+        const generated = (field.primary && field.auto) || field.defaultValue !== null;
+        const value = field.nullable ? `${base} | null` : base;
+        const type = generated ? `Generated<${value}>` : value;
         return `  readonly ${field.name.text}: ${type};`;
       }).join("\n")
     }\n}`
@@ -823,9 +1319,9 @@ export const schema = defineLanguage<File, SchemaModule, Checked>({
   check,
   typescript: types,
   runtime,
-  show: (type) => type.kind === "query" ? signatureText(type) : display(type),
+  show: (type) => type.kind === "query" || type.kind === "mutation" ? signatureText(type) : display(type),
   describe: (binding) => {
-    if (binding.type?.kind === "query") return signatureText(binding.type);
+    if (binding.type?.kind === "query" || binding.type?.kind === "mutation") return signatureText(binding.type);
     if (binding.type && binding.detail) return `${binding.detail}.${binding.name}: ${display(binding.type)}`;
     return binding.type ? display(binding.type) : undefined;
   },

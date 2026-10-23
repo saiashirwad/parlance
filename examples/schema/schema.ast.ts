@@ -16,7 +16,10 @@ export type File = FileSchemaNode;
 export type Decl =
   | Enum
   | Model
-  | Query;
+  | Query
+  | Insert
+  | Update
+  | Delete;
 
 export interface EnumEnumNode {
   readonly kind: "enum";
@@ -74,10 +77,29 @@ export type Base = BaseNameNode;
 export interface AttributeAttributeNode {
   readonly kind: "attribute";
   readonly name: Name;
+  readonly args: AttributeArgs | null;
   readonly span: Span;
 }
 
 export type Attribute = AttributeAttributeNode;
+
+export type AttributeArgs = DefaultValue;
+
+export interface DefaultValueDefaultNameNode {
+  readonly kind: "defaultName";
+  readonly name: Name;
+  readonly span: Span;
+}
+
+export interface DefaultValueDefaultLiteralNode {
+  readonly kind: "defaultLiteral";
+  readonly value: Literal;
+  readonly span: Span;
+}
+
+export type DefaultValue =
+  | DefaultValueDefaultNameNode
+  | DefaultValueDefaultLiteralNode;
 
 export interface QueryQueryNode {
   readonly kind: "query";
@@ -99,6 +121,100 @@ export interface ParamParamNode {
 }
 
 export type Param = ParamParamNode;
+
+export interface InsertInsertNode {
+  readonly kind: "insert";
+  readonly model: Name;
+  readonly assignments: readonly InsertAssignment[];
+  readonly span: Span;
+}
+
+export type Insert = InsertInsertNode;
+
+export interface InsertAssignmentInsertAssignmentNode {
+  readonly kind: "insertAssignment";
+  readonly field: Name;
+  readonly value: MutationValue;
+  readonly span: Span;
+}
+
+export type InsertAssignment = InsertAssignmentInsertAssignmentNode;
+
+export interface UpdateUpdateNode {
+  readonly kind: "update";
+  readonly model: Name;
+  readonly stages: readonly UpdateStage[];
+  readonly span: Span;
+}
+
+export type Update = UpdateUpdateNode;
+
+export interface UpdateStageUpdateWhereNode {
+  readonly kind: "updateWhere";
+  readonly field: Name;
+  readonly value: MutationValue;
+  readonly span: Span;
+}
+
+export interface UpdateStageUpdateSetNode {
+  readonly kind: "updateSet";
+  readonly assignments: readonly SetAssignment[];
+  readonly span: Span;
+}
+
+export type UpdateStage =
+  | UpdateStageUpdateWhereNode
+  | UpdateStageUpdateSetNode;
+
+export interface SetAssignmentSetAssignmentNode {
+  readonly kind: "setAssignment";
+  readonly field: Name;
+  readonly value: MutationValue;
+  readonly span: Span;
+}
+
+export type SetAssignment = SetAssignmentSetAssignmentNode;
+
+export interface DeleteDeleteNode {
+  readonly kind: "delete";
+  readonly model: Name;
+  readonly stages: readonly DeleteStage[];
+  readonly span: Span;
+}
+
+export type Delete = DeleteDeleteNode;
+
+export interface DeleteStageDeleteWhereNode {
+  readonly kind: "deleteWhere";
+  readonly field: Name;
+  readonly value: MutationValue;
+  readonly span: Span;
+}
+
+export type DeleteStage = DeleteStageDeleteWhereNode;
+
+export interface MutationValueBindNode {
+  readonly kind: "bind";
+  readonly name: Name;
+  readonly span: Span;
+}
+
+export interface MutationValueLiteralNode {
+  readonly kind: "literal";
+  readonly value: Literal;
+  readonly span: Span;
+}
+
+export interface MutationValueNameNode {
+  readonly kind: "name";
+  readonly name: Name;
+  readonly span: Span;
+}
+
+export type MutationValue =
+  | MutationValueBindNode
+  | MutationValueLiteralNode
+  | MutationValueNameNode;
 
 export interface StageWhereNode {
   readonly kind: "where";
