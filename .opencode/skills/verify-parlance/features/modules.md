@@ -48,7 +48,8 @@ End state:
 - Machine recognizes and analyzes imports but does not merge events or states yet.
 - Cross-file references and rename match definitions by URI and span across every analyzed node; open documents are the source when available.
 - Content mapper `watchedFiles` comes from the recursive guest scan under the config root, so an import outside that root is analyzed but not watched.
-- The graph re-reads the entry and reachable dependencies on every analyze; a changed dependency invalidates every transitive dependent, including for the content mapper and LSP.
-- An edit to one open LSP document refreshes open dependents whose graph nodes were invalidated before the next request.
+- The graph re-reads the entry and reachable dependencies on every analyze, including cached intermediate nodes reached from a new entry; a changed dependency invalidates every transitive dependent.
+- An edit to one open LSP document refreshes open dependents whose graph nodes were invalidated before the next request. Closing a document calls `graph.forget` and refreshes importers from disk.
+- Aliases are keyed by defining URI and declaration span, not checker-local ids, so a transitive model name cannot collide with an intermediate field alias.
 - Calc's TypeScript surface exports only locally declared values; imported values are re-imported by the runtime but not re-exported.
 - Imported schema declarations have no source mappings in the importer's TS surface; a mapping must stay inside the transformed document.
