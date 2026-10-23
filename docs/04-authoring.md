@@ -270,6 +270,10 @@ const runtime = (module: MachineModule): string =>
     data: {
       name: module.name.text,
       initial: module.initial.name.text,
+      events: module.events.map((event) => ({
+        name: event.name.text,
+        fields: event.fields.map((field) => ({ name: field.name.text, type: field.type })),
+      })),
       transitions: module.states.flatMap((state) =>
         state.transitions.map((transition) => ({
           state: state.name.text,
@@ -404,7 +408,7 @@ Projections and targets:
 Runtime:
 
 - `tests/calc.test.ts` runs the emitted module through the Node loader and checks stdout. It also asserts that a guest type error becomes a loader `SyntaxError` with a position.
-- `tests/machine.test.ts` starts a machine, sends legal events, and asserts that an illegal event throws.
+- `tests/machine.test.ts` starts a machine, sends a discriminated event with a payload, and asserts that a missing payload or an illegal transition throws.
 - `tests/schema.test.ts` seeds and queries SQLite through the loader.
 
 LSP:
