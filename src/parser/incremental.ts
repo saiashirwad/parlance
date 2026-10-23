@@ -1,6 +1,6 @@
 import { type Diagnostic, sortDiagnostics } from "../diagnostic.ts";
 import { type Span } from "../source.ts";
-import { lexFrom } from "./lex.ts";
+import { lexInto } from "./lex.ts";
 import {
   type Edit,
   type ItemRange,
@@ -8,8 +8,10 @@ import {
   type ParseResult,
   parseItemRange,
   parseSource,
+  trustedAst,
 } from "./parse.ts";
-import type { GrammarSpec, Key, LexToken, TokenList, Trivia } from "./spec.ts";
+import type { GrammarSpec } from "./spec.ts";
+import { EOF, ERROR, TokenBuilder, TokenList, TriviaBuilder, WORD } from "./tokens.ts";
 
 export type IncrementalOptions = ParseOptions & {
   /** Compare against a full parse and fall back on any difference. */
@@ -50,9 +52,13 @@ const extractItems = (spec: GrammarSpec, value: unknown): readonly Item[] | null
     ? value
     : (value as Record<string, unknown>)[incremental.field!];
   if (!Array.isArray(list)) return null;
-  for (const item of list) if (!isItem(item)) return null;
+  if (!trustedAst.has(value)) {
+    for (const item of list) if (!isItem(item)) return null;
+  }
   return list as readonly Item[];
 };
+
+const validatedRoots = new WeakSet<object>();
 
 const ordered = (items: readonly unknown[], limit: number): items is readonly Item[] => {
   let previousEnd = 0;
@@ -65,70 +71,73 @@ const ordered = (items: readonly unknown[], limit: number): items is readonly It
   return true;
 };
 
-const startTokenAt = (tokens: readonly LexToken[], offset: number): number => {
+const startTokenAt = (tokens: TokenList, offset: number): number => {
   let low = 0;
   let high = tokens.length;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (tokens[middle]!.span.end <= offset) low = middle + 1;
+    if (tokens.end[middle]! <= offset) low = middle + 1;
     else high = middle;
   }
   return Math.min(low, tokens.length - 1);
 };
 
-const stopTokenAt = (tokens: readonly LexToken[], offset: number): number => {
+const stopTokenAt = (tokens: TokenList, offset: number): number => {
   let low = 0;
   let high = tokens.length;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (tokens[middle]!.span.start < offset) low = middle + 1;
+    if (tokens.start[middle]! < offset) low = middle + 1;
     else high = middle;
   }
   return Math.min(low, tokens.length - 1);
 };
 
-const startsItem = (token: LexToken, sync: ReadonlySet<Key>): boolean => {
-  switch (token.kind) {
-    case "word":
-      return sync.has(`word:${token.text}`) || sync.has("word");
-    case "symbol":
-      return sync.has(`symbol:${token.text}`);
-    case "token":
-      return sync.has(`token:${token.name}`);
-    case "regex":
-      return sync.has(`regex:${token.index ?? 0}`);
-    case "eof":
-      return false;
-    case "error":
-      return sync.has(`symbol:${token.text}`);
+const startsItem = (tokens: TokenList, index: number, sync: Uint8Array, wordKeyId: number): boolean => {
+  if (sync[tokens.keyAt(index)] === 1) return true;
+  return tokens.kindAt(index) === WORD && sync[wordKeyId] === 1;
+};
+
+const firstEndingAfter = (items: readonly Item[], offset: number): number => {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (items[middle]!.span.end <= offset) low = middle + 1;
+    else high = middle;
   }
+  return low;
+};
+
+const firstStartingAt = (items: readonly Item[], offset: number): number => {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = (low + high) >> 1;
+    if (items[middle]!.span.start < offset) low = middle + 1;
+    else high = middle;
+  }
+  return low;
 };
 
 const selectWindow = (items: readonly Item[], edit: Edit): readonly [number, number] => {
   const count = items.length;
   if (count === 0) return [-1, -1];
-  let low = -1;
-  let high = -1;
-  for (let index = 0; index < count; index++) {
-    const span = items[index]!.span;
-    if (span.end > edit.start && span.start < edit.end) {
-      if (low < 0) low = index;
-      high = index;
-    }
-  }
-  if (low < 0) {
-    let before = -1;
-    let after = -1;
-    for (let index = 0; index < count; index++) {
-      const span = items[index]!.span;
-      if (span.end <= edit.start) before = index;
-      if (after < 0 && span.start >= edit.end) after = index;
-    }
-    if (before >= 0 && after >= 0) {
+  const first = firstEndingAfter(items, edit.start);
+  const last = firstStartingAt(items, edit.end) - 1;
+  let low: number;
+  let high: number;
+  if (first <= last) {
+    low = first;
+    high = last;
+  } else {
+    const before = first - 1;
+    const after = firstStartingAt(items, edit.end);
+    if (before >= 0 && after < count) {
       low = before;
       high = after;
     } else if (before >= 0) low = high = before;
-    else if (after >= 0) low = high = after;
+    else if (after < count) low = high = after;
     else return [0, count - 1];
   }
   return [Math.max(0, low - 1), Math.min(count - 1, high + 1)];
@@ -156,37 +165,77 @@ const reusableTail = (spec: GrammarSpec): boolean => {
   return value;
 };
 
-const tokenStartingAt = (tokens: readonly LexToken[], offset: number): number => {
+const tokenStartingAt = (tokens: TokenList, offset: number): number => {
   let low = 0;
   let high = tokens.length;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (tokens[middle]!.span.start < offset) low = middle + 1;
+    if (tokens.start[middle]! < offset) low = middle + 1;
     else high = middle;
   }
-  return low < tokens.length && tokens[low]!.span.start === offset ? low : -1;
+  return low < tokens.length && tokens.start[low] === offset ? low : -1;
 };
 
-const countTriviaStartsBefore = (trivia: readonly Trivia[], offset: number): number => {
+const countTriviaStartsBefore = (trivia: { readonly length: number; readonly start: Uint32Array; }, offset: number): number => {
   let low = 0;
   let high = trivia.length;
   while (low < high) {
     const middle = (low + high) >> 1;
-    if (trivia[middle]!.span.start < offset) low = middle + 1;
+    if (trivia.start[middle]! < offset) low = middle + 1;
     else high = middle;
   }
   return low;
 };
 
-const shiftToken = (token: LexToken, delta: number): LexToken => ({
-  ...token,
-  span: { start: token.span.start + delta, end: token.span.end + delta },
-});
+const sameRange = (
+  left: string,
+  leftStart: number,
+  leftEnd: number,
+  right: string,
+  rightStart: number,
+  rightEnd: number,
+): boolean => {
+  const length = leftEnd - leftStart;
+  if (length !== rightEnd - rightStart) return false;
+  for (let index = 0; index < length; index++) {
+    if (left.charCodeAt(leftStart + index) !== right.charCodeAt(rightStart + index)) return false;
+  }
+  return true;
+};
 
-const shiftTrivia = (entry: Trivia, delta: number): Trivia => ({
-  ...entry,
-  span: { start: entry.span.start + delta, end: entry.span.end + delta },
-});
+const sameAt = (left: TokenList, leftIndex: number, right: TokenList, rightIndex: number, delta: number): boolean => {
+  if (
+    left.kind[leftIndex] !== right.kind[rightIndex]
+    || left.keyId[leftIndex] !== right.keyId[rightIndex]
+    || left.end[leftIndex] !== right.end[rightIndex]! + delta
+  ) return false;
+  if ((left.kind[leftIndex]! & 7) === WORD || (left.kind[leftIndex]! & 7) === ERROR) {
+    return sameRange(
+      left.source,
+      left.start[leftIndex]!,
+      left.end[leftIndex]!,
+      right.source,
+      right.start[rightIndex]!,
+      right.end[rightIndex]!,
+    );
+  }
+  return left.start[leftIndex] === right.start[rightIndex]! + delta;
+};
+
+const sameTrivia = (left: { readonly length: number; readonly start: Uint32Array; readonly end: Uint32Array; readonly kind: Uint8Array; }, right: { readonly length: number; readonly start: Uint32Array; readonly end: Uint32Array; readonly kind: Uint8Array; }, from: number): boolean => {
+  let index = 0;
+  while (index < left.length && index < right.length && right.start[index]! < from) index++;
+  const remaining = right.length - index;
+  if (left.length !== remaining) return false;
+  for (let at = 0; at < left.length; at++) {
+    if (
+      left.start[at] !== right.start[index + at]
+      || left.end[at] !== right.end[index + at]
+      || left.kind[at] !== right.kind[index + at]
+    ) return false;
+  }
+  return true;
+};
 
 /**
  * Reuse the previous token tail after an edit.
@@ -201,68 +250,122 @@ const shiftTrivia = (entry: Trivia, delta: number): Trivia => ({
  * exact tokenization. Lookbehind can read across that boundary, so
  * `reusableTail` turns reuse off for grammars that use it.
  */
+const sameBuilderAt = (source: string, tokens: TokenBuilder, at: number, old: TokenList, index: number, delta: number): boolean => {
+  if (
+    tokens.kind[at] !== old.kind[index]
+    || tokens.keyId[at] !== old.keyId[index]
+    || tokens.end[at] !== old.end[index]! + delta
+  ) return false;
+  if ((tokens.kind[at]! & 7) === WORD || (tokens.kind[at]! & 7) === ERROR) {
+    return sameRange(
+      source,
+      tokens.start[at]!,
+      tokens.end[at]!,
+      old.source,
+      old.start[index]!,
+      old.end[index]!,
+    );
+  }
+  return tokens.start[at] === old.start[index]! + delta;
+};
+
+/** Text before the edit is unchanged, so equal boundaries and keys mean the same tokens. */
+const sameStructureAt = (tokens: TokenBuilder, at: number, old: TokenList, index: number, delta: number): boolean =>
+  tokens.kind[at] === old.kind[index]
+  && tokens.keyId[at] === old.keyId[index]
+  && tokens.start[at] === old.start[index]! + delta
+  && tokens.end[at] === old.end[index]! + delta;
+
+const sameBuilderSlice = (tokens: TokenBuilder, old: TokenList, from: number): boolean => {
+  const count = tokens.count;
+  if (count > old.length) return false;
+  for (let index = from; index < count; index++) {
+    if (!sameStructureAt(tokens, index, old, index, 0)) return false;
+  }
+  return true;
+};
+
+/**
+ * Reuse the previous token tail after an edit.
+ *
+ * The stream is lexed from offset 0. A token regex can match a longer string
+ * after an edit, so tokens before the edit are not reused on a guess about how
+ * far a change can reach. Each lexed token before the window is compared with
+ * the previous stream during the scan; a difference forces a full parse.
+ *
+ * Lexing stops at the first boundary at or after the inserted text where the
+ * produced token equals the previous token shifted by `delta`. From that offset
+ * the remaining source text is identical, so the shifted previous tail is the
+ * exact tokenization. Lookbehind can read across that boundary, so
+ * `reusableTail` turns reuse off for grammars that use it.
+ */
 const relex = (
   spec: GrammarSpec,
   previous: ParseResult<unknown>,
   source: string,
   edit: Edit,
   delta: number,
-): TokenList & { readonly resync: number } => {
+  prefix: number,
+): { tokens: TokenList; resync: number; verified: boolean; mismatch: boolean } => {
   const old = previous.tokens;
   const resyncFrom = edit.start + edit.insert.length;
+  const tokens = new TokenBuilder(old.length + 8);
+  const trivia = new TriviaBuilder(previous.trivia.length + 8);
   let resync = -1;
-  const stop = (tokens: readonly LexToken[], offset: number): boolean => {
+  let mismatch = false;
+  const stop = (builder: TokenBuilder, offset: number): boolean => {
+    const at = builder.count - 1;
+    if (at < prefix) {
+      if (!sameStructureAt(builder, at, old, at, 0)) {
+        mismatch = true;
+        return true;
+      }
+      return false;
+    }
     if (offset < resyncFrom) return false;
-    const token = tokens[tokens.length - 1]!;
-    const index = tokenStartingAt(old, token.span.start - delta);
-    if (index < 0) return false;
-    const before = old[index]!;
-    if (
-      token.kind !== before.kind
-      || token.text !== before.text
-      || token.name !== before.name
-      || token.span.end !== before.span.end + delta
-    ) return false;
+    const index = tokenStartingAt(old, builder.start[at]! - delta);
+    if (index < prefix) return false;
+    if (!sameBuilderAt(source, builder, at, old, index, delta)) return false;
     resync = index;
     return true;
   };
-  const run = lexFrom(spec, source, 0, reusableTail(spec) ? stop : undefined);
+  lexInto(spec, source, 0, tokens, trivia, reusableTail(spec) ? stop : undefined);
+
+  if (mismatch) return { tokens: tokens.finish(source, trivia, spec), resync, verified: true, mismatch };
+
+  if (resync < 0) {
+    return { tokens: tokens.finish(source, trivia, spec), resync, verified: false, mismatch };
+  }
+
+  if (delta === 0 && sameBuilderSlice(tokens, old, prefix) && sameTrivia(trivia.finish(), previous.trivia, 0)) {
+    return {
+      tokens: new TokenList(
+        source,
+        old.kind,
+        old.keyId,
+        old.start,
+        old.end,
+        old.length,
+        old.trivia,
+        old.wordKeyId,
+        old.tokenNames,
+        old.ruleOf,
+      ),
+      resync,
+      verified: true,
+      mismatch,
+    };
+  }
 
   const tailFrom = resync + 1;
-  let tailTokens: readonly LexToken[];
-  if (tailFrom <= 0 || tailFrom >= old.length) {
-    tailTokens = [];
-  } else if (delta === 0) {
-    tailTokens = old.slice(tailFrom);
-  } else {
-    const tail = new Array<LexToken>(old.length - tailFrom);
-    for (let index = 0; index < tail.length; index++) tail[index] = shiftToken(old[tailFrom + index]!, delta);
-    tailTokens = tail;
+  if (tailFrom < old.length) tokens.append(old, tailFrom, old.length, delta);
+  else tokens.push(EOF, spec.eofKeyId, source.length, source.length, 0);
+  if (tailFrom < old.length) {
+    const from = countTriviaStartsBefore(previous.trivia, old.end[resync]!);
+    trivia.append(previous.trivia, from, previous.trivia.length, delta);
   }
-  let tailTrivia: readonly Trivia[] = [];
-  if (tailFrom > 0 && tailFrom < old.length) {
-    const from = countTriviaStartsBefore(previous.trivia, old[tailFrom - 1]!.span.end);
-    if (delta === 0) {
-      tailTrivia = previous.trivia.slice(from);
-    } else {
-      const tail = new Array<Trivia>(previous.trivia.length - from);
-      for (let index = 0; index < tail.length; index++) tail[index] = shiftTrivia(previous.trivia[from + index]!, delta);
-      tailTrivia = tail;
-    }
-  }
-  return {
-    tokens: run.tokens.concat(tailTokens),
-    trivia: run.trivia.concat(tailTrivia),
-    resync,
-  };
+  return { tokens: tokens.finish(source, trivia, spec), resync, verified: true, mismatch };
 };
-
-const sameToken = (left: LexToken, right: LexToken, delta: number): boolean =>
-  left.kind === right.kind
-  && left.text === right.text
-  && left.name === right.name
-  && left.span.start === right.span.start + delta
-  && left.span.end === right.span.end + delta;
 
 export const reparse = <A>(
   spec: GrammarSpec,
@@ -284,8 +387,13 @@ export const reparse = <A>(
 
   const incremental = spec.incremental;
   if (!incremental || previous.value === null) return fallback();
+  const trusted = trustedAst.has(previous.value as object);
   const items = itemsOf(previous.value);
-  if (!items || !ordered(items, oldLength)) return fallback();
+  if (!items) return fallback();
+  if (!trusted && !validatedRoots.has(previous.value as object)) {
+    if (!ordered(items, oldLength)) return fallback();
+    validatedRoots.add(previous.value as object);
+  }
   if (edit.start < 0 || edit.end < edit.start || edit.end > oldLength) return fallback();
   if (oldLength + delta !== source.length) return fallback();
   if (options.previousSource !== undefined) {
@@ -329,20 +437,27 @@ export const reparse = <A>(
   const mapEnd = (offset: number): number =>
     offset < edit.start ? offset : offset >= edit.end ? offset + delta : edit.start + edit.insert.length;
 
-  const { tokens, trivia, resync } = relex(spec, previous, source, edit, delta);
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
   let end = high;
+  const prefix = low <= 0 ? 0 : startTokenAt(previous.tokens, items[low - 1]!.span.end);
+  const { tokens, resync, verified, mismatch } = relex(spec, previous, source, edit, delta, prefix);
+  if (mismatch) return fallback();
   const startToken = low <= 0
-    ? items[0] === undefined
-      ? 0
-      : stopTokenAt(tokens, mapOffset(items[0].span.start))
+    ? incremental.guarded
+      ? items[0] === undefined
+        ? 0
+        : stopTokenAt(tokens, mapOffset(items[0].span.start))
+      : 0
     : startTokenAt(tokens, mapOffset(items[low - 1]!.span.end));
   // Reused prefix items are only sound when their tokens are unchanged. A
-  // lookahead token before the edit can be reclassified by text after it.
-  const prefix = Math.min(startToken, previous.tokens.length, tokens.length);
-  for (let index = 0; index < prefix; index++) {
-    if (!sameToken(tokens[index]!, previous.tokens[index]!, 0)) return fallback();
+  // token regex can reach across the edit and reclassify text far before it,
+  // so compare against the old prefix boundary, not the new token index.
+  if (!verified) {
+    if (tokens.length < prefix) return fallback();
+    for (let index = 0; index < prefix; index++) {
+      if (!sameAt(tokens, index, previous.tokens, index, 0)) return fallback();
+    }
   }
   let range: ItemRange | null = null;
   let stop = 0;
@@ -373,8 +488,8 @@ export const reparse = <A>(
     if (
       stop < tokens.length - 1
       && end < count - 1
-      && range.first.size > 0
-      && !startsItem(tokens[stop]!, range.first)
+      && range.first.includes(1)
+      && !startsItem(tokens, stop, range.first, spec.wordKeyId)
     ) {
       // The root repetition would stop at this token, so items after the
       // window could not have been parsed in a full parse.
@@ -387,8 +502,8 @@ export const reparse = <A>(
   // syntax, so diagnostics inside a guarded window force a full parse.
   if (incremental.guarded && range.diagnostics.some((entry) => entry.severity === "error")) return fallback();
 
-  const repairedStart = tokens[startToken]!.span.start;
-  const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
+  const repairedStart = tokens.start[startToken]!;
+  const repairedEnd = stop > startToken ? tokens.end[stop - 1]! : repairedStart;
 
   // Reused suffix items are only sound when the tokens above them agree with
   // the previous stream. A guarded root also has footer tokens outside the
@@ -399,7 +514,7 @@ export const reparse = <A>(
     const length = tokens.length - stop;
     if (length !== previous.tokens.length - oldStop) return fallback();
     for (let index = 0; index < length; index++) {
-      if (!sameToken(tokens[stop + index]!, previous.tokens[oldStop + index]!, delta)) return fallback();
+      if (!sameAt(tokens, stop + index, previous.tokens, oldStop + index, delta)) return fallback();
     }
   } else if (end < count - 1) {
     const oldStop = stopTokenAt(previous.tokens, items[end]!.span.end);
@@ -408,7 +523,7 @@ export const reparse = <A>(
       const length = newEnd - stop;
       if (length > previous.tokens.length - oldStop) return fallback();
       for (let index = 0; index < length; index++) {
-        if (!sameToken(tokens[stop + index]!, previous.tokens[oldStop + index]!, delta)) return fallback();
+        if (!sameAt(tokens, stop + index, previous.tokens, oldStop + index, delta)) return fallback();
       }
     }
   }
@@ -437,16 +552,12 @@ export const reparse = <A>(
       }
       return { ...record, start: mapOffset(record.start), end: mapOffset(record.end) };
     }
-    const keys = Object.keys(record);
     if (options.mutate) {
-      for (let index = 0; index < keys.length; index++) shift(record[keys[index]!]);
+      for (const key in record) shift(record[key]);
       return record;
     }
     const clone: Record<string, unknown> = {};
-    for (let index = 0; index < keys.length; index++) {
-      const key = keys[index]!;
-      clone[key] = shift(record[key]);
-    }
+    for (const key in record) clone[key] = shift(record[key]);
     return clone;
   };
   // A zero-length delta leaves every reused span in place. Reuse the nodes
@@ -455,7 +566,8 @@ export const reparse = <A>(
 
   const spliced: unknown[] = [...before, ...range.values, ...after];
   if (incremental.min > 0 && spliced.length === 0) return fallback();
-  if (!ordered(spliced, source.length)) return fallback();
+  if (!trusted && !ordered(spliced, source.length)) return fallback();
+  validatedRoots.add(spliced);
 
   let value: unknown;
   if (incremental.shape === "array") {
@@ -482,12 +594,12 @@ export const reparse = <A>(
     const start = incremental.guarded && oldRootSpan
       ? mapOffset(oldRootSpan.start)
       : startToken === 0
-      ? tokens[0]!.span.start
+      ? tokens.start[0]!
       : rootStartsBeforeItems && oldRootSpan
       ? mapOffset(oldRootSpan.start)
       : first && isItem(first)
       ? first.span.start
-      : tokens[0]!.span.start;
+      : tokens.start[0]!;
     const lastEnd = last && isItem(last) ? last.span.end : start;
     // The root repetition spans the recovery tokens it skipped, not just its
     // items, so a repaired tail can reach past the last item.
@@ -514,11 +626,12 @@ export const reparse = <A>(
   }
   const diagnostics = sortDiagnostics([...kept, ...range.diagnostics]);
   const ok = value !== null && diagnostics.every((entry) => entry.severity !== "error");
+  if (value !== null && typeof value === "object") trustedAst.add(value as object);
   const result: IncrementalResult<A> = {
     ok,
     value: value as A,
     tokens,
-    trivia,
+    trivia: tokens.trivia,
     diagnostics,
     stats: {
       fallback: false,

@@ -8,6 +8,7 @@ export {
   facts,
   type Reference,
   referenceAt,
+  refinedKinds,
   semanticTokens,
   type Token,
   type TokenKind,

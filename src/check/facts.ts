@@ -116,18 +116,29 @@ export const definitionAt = <T>(value: Facts<T>, offset: number): Definition<T> 
   return local(value).find((definition) => contains(definition.span, offset));
 };
 
+const refinedCache = new WeakMap<object, Map<number, TokenKind>>();
+
+/** Definition and reference kinds by span start, for refining lexical tokens. */
+export const refinedKinds = <T>(value: Facts<T>): Map<number, TokenKind> => {
+  const cached = refinedCache.get(value);
+  if (cached !== undefined) return cached;
+  const byId = new Map<number, DefinitionKind>();
+  for (const definition of value.definitions) byId.set(definition.id, definition.kind);
+  const exact = new Map<number, TokenKind>();
+  for (const definition of local(value)) exact.set(definition.span.start, definition.kind);
+  for (const reference of value.references) {
+    const kind = byId.get(reference.id);
+    if (kind !== undefined) exact.set(reference.span.start, kind);
+  }
+  refinedCache.set(value, exact);
+  return exact;
+};
+
 /** Refines lexical tokens with declared/referenced kinds without overlapping ranges. */
 export const semanticTokens = <T>(value: Facts<T>): readonly Token[] => {
-  const byId = new Map(value.definitions.map((definition) => [definition.id, definition]));
-  const exact = new Map<string, TokenKind>();
-  const key = (at: Span) => `${at.start}:${at.end}`;
-  for (const definition of local(value)) exact.set(key(definition.span), definition.kind);
-  for (const reference of value.references) {
-    const definition = byId.get(reference.id);
-    if (definition) exact.set(key(reference.span), definition.kind);
-  }
+  const exact = refinedKinds(value);
   return value.tokens.map((token) => {
-    const refined = exact.get(key(token.span));
+    const refined = exact.get(token.span.start);
     return refined === undefined || refined === token.kind ? token : { ...token, kind: refined };
   });
 };

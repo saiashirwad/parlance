@@ -2,19 +2,21 @@ import { type Diagnostic, error, sortDiagnostics, warning } from "../diagnostic.
 import { type Span, type Text } from "../source.ts";
 import { tokenKinds, type TokenKind, type Token } from "../check/facts.ts";
 import { lex as lexTokens } from "../parser/lex.ts";
+import { EOF, ERROR, highlightCode } from "../parser/tokens.ts";
 import { type ParseOptions, type ParseResult, parseSource } from "../parser/parse.ts";
 import {
   type GrammarSpec,
   type InlineSpec,
   type Key,
+  type KeyId,
   type LexToken,
   type PExpr,
   type PrecLevel,
   type SeqItem,
-  type TokenList,
+  type SymbolSpec,
   type TokenSpec,
-  type Trivia,
 } from "../parser/spec.ts";
+import type { TokenList } from "../parser/tokens.ts";
 import { parseGrammar as parseGrammarSource } from "./parse.ts";
 import {
   type Alternative,
@@ -34,8 +36,8 @@ export type CompiledGrammar<A = unknown> = {
   readonly diagnostics: readonly Diagnostic[];
   parse(source: string, options?: ParseOptions): ParseResult<A>;
   lex(source: string): TokenList;
-  highlight(source: string): readonly Token[];
-  highlightTokens(tokens: readonly LexToken[], trivia: readonly Trivia[]): readonly Token[];
+  highlight(source: string): Token[];
+  highlightTokens(tokens: TokenList): Token[];
 };
 
 type Context = {
@@ -137,6 +139,23 @@ const firstChars = (source: string): Uint8Array | null => {
   return null;
 };
 
+const fastToken = (source: string): number => {
+  if (source === "\\d+" || source === "[0-9]+") return 1;
+  if (source === "\\d+(?:\\.\\d+)?" || source === "[0-9]+(?:\\.[0-9]+)?") return 2;
+  return 0;
+};
+
+const isFastWhitespace = (source: string): boolean =>
+  /^\\s[+]?$/.test(source) || /^\[\\s\][+]?$/.test(source);
+
+/** A line-comment pattern the fixed scanner reproduces: no escapes that could cross a newline. */
+const isFastLineComment = (source: string): boolean =>
+  source.startsWith("//") && !/\\(?:s|r|u)|\[\^\]/.test(source);
+
+/** A block-comment pattern the fixed scanner reproduces: it runs to the first closing delimiter. */
+const isFastBlockComment = (source: string): boolean =>
+  /^\/\\\*\[\\s\\S\]\*\?\\\*\/$/.test(source) || /^\/\\\*\[\^\\\*\]\*\\\*\/$/.test(source);
+
 const highlightOf = (name: string): TokenKind | undefined => {
   const direct = tokenKinds.find((kind) => kind === name);
   if (direct) return direct;
@@ -151,11 +170,13 @@ const defaultHighlight = (name: string): TokenKind => {
   return "variable";
 };
 
-const union = (sets: Iterable<ReadonlySet<Key>>): ReadonlySet<Key> => {
-  const result = new Set<Key>();
+const union = (sets: Iterable<ReadonlySet<KeyId>>): Set<KeyId> => {
+  const result = new Set<KeyId>();
   for (const set of sets) for (const key of set) result.add(key);
   return result;
 };
+
+const EMPTY_BITS = new Uint8Array(0);
 
 const unionRules = (sets: Iterable<ReadonlySet<number>>): Set<number> => {
   const result = new Set<number>();
@@ -176,6 +197,17 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     wordFull = new RegExp(`^(?:${defaultWord})$`);
     wordRegex = new RegExp(defaultWord, "y");
   }
+  const keyIds = new Map<Key, KeyId>();
+  const keyText: Key[] = [];
+  const intern = (key: Key): KeyId => {
+    let id = keyIds.get(key);
+    if (id === undefined) {
+      id = keyText.length;
+      keyIds.set(key, id);
+      keyText.push(key);
+    }
+    return id;
+  };
   const tokens = new Map<string, TokenSpec>();
   const rules = new Map<string, number>();
 
@@ -204,6 +236,9 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       regex,
       first: firstChars(source),
       highlight: highlight ?? defaultHighlight(name),
+      highlightCode: highlightCode(highlight ?? defaultHighlight(name)),
+      fast: fastToken(source),
+      keyId: intern(`token:${name}`),
       span: declaration.name.span,
     });
   }
@@ -238,10 +273,14 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
   };
 
   const skips: RegExp[] = [];
+  const skipSources: string[] = [];
   for (const skip of file.skips) {
     const source = decodePattern(skip.pattern.text);
     const regex = compilePattern(source, skip.pattern.span, diagnostics, "skip pattern");
-    if (regex) skips.push(regex);
+    if (regex) {
+      skips.push(regex);
+      skipSources.push(source);
+    }
   }
 
   const internals = (primary: Primary, seen: Set<Primary>): { expr: PExpr; captures: boolean } => {
@@ -250,7 +289,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         const literal = decodeString(primary.text.text, primary.text.span);
         if (literal.text.length === 0) {
           diagnostics.push(error("An empty literal cannot be matched", primary.span, { code: "grammar/empty-literal" }));
-          return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+          return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
         }
         const word = wordFull.test(literal.text);
         if (word) context.keywords.add(literal.text);
@@ -260,8 +299,8 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
             t: "lit",
             text: literal.text,
             word,
-            key: word ? `word:${literal.text}` : `symbol:${literal.text}`,
-            first: new Set<Key>([word ? `word:${literal.text}` : `symbol:${literal.text}`]),
+            keyId: intern(word ? `word:${literal.text}` : `symbol:${literal.text}`),
+            first: EMPTY_BITS,
             nullable: false,
             span: primary.span,
           },
@@ -269,16 +308,16 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         };
       }
       case "word":
-        return { expr: { t: "word", first: new Set<Key>(["word"]), nullable: false, span: primary.span }, captures: true };
+        return { expr: { t: "word", first: EMPTY_BITS, nullable: false, span: primary.span }, captures: true };
       case "token": {
         const name = text(primary.name);
         const token = context.tokens.get(name);
         if (!token) {
           diagnostics.push(error(`Unknown token $${name}`, primary.name.span, { code: "grammar/unknown-token" }));
-          return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+          return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
         }
         return {
-          expr: { t: "token", name, index: [...context.tokens.keys()].indexOf(name), first: new Set<Key>([`token:${name}`]), nullable: false, span: primary.span },
+          expr: { t: "token", name, index: [...context.tokens.keys()].indexOf(name), keyId: token.keyId, first: EMPTY_BITS, nullable: false, span: primary.span },
           captures: true,
         };
       }
@@ -287,26 +326,26 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         let index = context.inlineIndex.get(source);
         if (index === undefined) {
           const regex = compilePattern(source, primary.source.span, diagnostics, "regular expression");
-          if (!regex) return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+          if (!regex) return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
           index = context.inline.length;
-          context.inline.push({ source, regex, span: primary.source.span });
+          context.inline.push({ source, regex, keyId: intern(`regex:${index}`), span: primary.source.span });
           context.inlineIndex.set(source, index);
         }
-        return { expr: { t: "re", index, first: new Set<Key>([`regex:${index}`]), nullable: false, span: primary.span }, captures: true };
+        return { expr: { t: "re", index, keyId: context.inline[index]!.keyId, first: EMPTY_BITS, nullable: false, span: primary.span }, captures: true };
       }
       case "cut":
-        return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+        return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
       case "ref": {
         const name = text(primary.name);
         const rule = context.rules.get(name);
         if (rule === undefined) {
           diagnostics.push(error(`Unknown rule ${name}`, primary.name.span, { code: "grammar/unknown-rule" }));
-          return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+          return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
         }
-        return { expr: { t: "ref", rule, first: new Set<Key>(), nullable: false, span: primary.span }, captures: true };
+        return { expr: { t: "ref", rule, first: EMPTY_BITS, nullable: false, span: primary.span }, captures: true };
       }
       case "group": {
-        if (seen.has(primary)) return { expr: { t: "cut", first: new Set<Key>(), nullable: true, span: primary.span }, captures: false };
+        if (seen.has(primary)) return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: primary.span }, captures: false };
         seen.add(primary);
         const alts = lowerAlternatives(primary.alts, seen);
         return { expr: alts, captures: capturesOf(alts) };
@@ -324,7 +363,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
             separator: separator.expr,
             min: primary.kind === "sep" || primary.kind === "sepEnd" ? 0 : 1,
             trailing: primary.kind === "sepEnd" || primary.kind === "sepEnd1",
-            first: new Set<Key>(),
+            first: EMPTY_BITS,
             nullable: primary.kind === "sep" || primary.kind === "sepEnd",
             span: primary.span,
           },
@@ -365,11 +404,11 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     switch (unary.kind) {
       case "and": {
         const inner = lowerUnary(unary.expr, seen);
-        return { expr: { t: "and", e: inner.expr, first: new Set<Key>(), nullable: true, span: unary.span }, captures: false };
+        return { expr: { t: "and", e: inner.expr, first: EMPTY_BITS, nullable: true, span: unary.span }, captures: false };
       }
       case "not": {
         const inner = lowerUnary(unary.expr, seen);
-        return { expr: { t: "not", e: inner.expr, first: new Set<Key>(), nullable: true, span: unary.span }, captures: false };
+        return { expr: { t: "not", e: inner.expr, first: EMPTY_BITS, nullable: true, span: unary.span }, captures: false };
       }
       case "star":
       case "plus":
@@ -377,7 +416,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         const inner = lowerUnary(unary.expr, seen);
         if (unary.kind === "opt") {
           return {
-            expr: { t: "opt", e: inner.expr, first: new Set<Key>(), nullable: true, span: unary.span },
+            expr: { t: "opt", e: inner.expr, first: EMPTY_BITS, nullable: true, span: unary.span },
             captures: inner.captures,
           };
         }
@@ -385,10 +424,10 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
           expr: {
             t: unary.kind,
             e: inner.expr,
-            first: new Set<Key>(),
+            first: EMPTY_BITS,
             nullable: unary.kind === "star",
             recover: false,
-            sync: new Set<Key>(),
+            sync: EMPTY_BITS,
             span: unary.span,
           },
           captures: inner.captures,
@@ -408,7 +447,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     });
     const tag = alternative.tag === null ? null : text(alternative.tag);
     const capturesCount = items.reduce((count, item) => count + (item.capture ? 1 : 0), 0);
-    return { t: "seq", tag, items, captures: capturesCount, first: new Set<Key>(), nullable: false, span: alternative.span };
+    return { t: "seq", tag, items, captures: capturesCount, first: EMPTY_BITS, nullable: false, span: alternative.span };
   };
 
   const lowerAlternatives = (alternatives: readonly Alternative[], seen: Set<Primary>): PExpr => {
@@ -416,7 +455,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     return {
       t: "alt",
       alts,
-      first: new Set<Key>(),
+      first: EMPTY_BITS,
       nullable: false,
       span: alts.length ? { start: alts[0]!.span.start, end: alts[alts.length - 1]!.span.end } : { start: 0, end: 0 },
     };
@@ -434,7 +473,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         assoc: assoc as PrecLevel["assoc"],
         bp: (index + 1) * 2,
         operators,
-        first: new Set(),
+        first: EMPTY_BITS,
         span: level.span,
       };
     });
@@ -443,7 +482,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       t: "precedence",
       levels,
       atom,
-      first: new Set<Key>(),
+      first: EMPTY_BITS,
       nullable: false,
       span: body.span,
     };
@@ -473,7 +512,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
 
   const rulesByName = new Map([...context.rules].map(([name, index]) => [index, name]));
   const nullableRule = lowered.map(() => false);
-  const firstRule: Set<Key>[] = lowered.map(() => new Set());
+  const firstRule: Set<KeyId>[] = lowered.map(() => new Set<KeyId>());
   const nullableOf = (expr: PExpr): boolean => {
     switch (expr.t) {
       case "lit":
@@ -501,20 +540,20 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         return nullableOf(expr.atom);
     }
   };
-  const firstOf = (expr: PExpr): ReadonlySet<Key> => {
+  const firstOf = (expr: PExpr): Set<KeyId> => {
     switch (expr.t) {
       case "lit":
-        return new Set([expr.key]);
+        return new Set([expr.keyId]);
       case "word":
-        return new Set<Key>(["word"]);
+        return new Set<KeyId>([intern("word")]);
       case "token":
-        return new Set<Key>([`token:${expr.name}`]);
+        return new Set<KeyId>([expr.keyId]);
       case "re":
-        return new Set<Key>([`regex:${expr.index}`]);
+        return new Set<KeyId>([expr.keyId]);
       case "ref":
-        return firstRule[expr.rule] ?? new Set();
+        return firstRule[expr.rule] ?? new Set<KeyId>();
       case "seq": {
-        const keys = new Set<Key>();
+        const keys = new Set<KeyId>();
         for (const item of expr.items) {
           for (const key of firstOf(item.expr)) keys.add(key);
           if (!nullableOf(item.expr)) break;
@@ -531,9 +570,8 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         return firstOf(expr.item);
       case "and":
       case "not":
-        return new Set();
       case "cut":
-        return new Set();
+        return new Set<KeyId>();
       case "precedence": {
         const sets = [firstOf(expr.atom)];
         for (const level of expr.levels) {
@@ -568,25 +606,31 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     });
   }
 
-  const syncOf = (expr: PExpr, seen: Set<number>): Set<Key> => {
+  const toBits = (keys: Iterable<KeyId>): Uint8Array => {
+    const bits = new Uint8Array(keyText.length);
+    for (const key of keys) bits[key] = 1;
+    return bits;
+  };
+
+  const syncOf = (expr: PExpr, seen: Set<number>): Set<KeyId> => {
     switch (expr.t) {
       case "lit":
-        return new Set([expr.key]);
+        return new Set([expr.keyId]);
       case "word":
-        return new Set<Key>(["word"]);
+        return new Set<KeyId>([intern("word")]);
       case "token":
-        return new Set<Key>([`token:${expr.name}`]);
+        return new Set<KeyId>([expr.keyId]);
       case "re":
-        return new Set<Key>([`regex:${expr.index}`]);
+        return new Set<KeyId>([expr.keyId]);
       case "ref": {
-        if (seen.has(expr.rule)) return new Set();
+        if (seen.has(expr.rule)) return new Set<KeyId>();
         seen.add(expr.rule);
-        const value = firstRule[expr.rule] ?? new Set();
+        const value = firstRule[expr.rule] ?? new Set<KeyId>();
         seen.delete(expr.rule);
         return new Set(value);
       }
       case "seq": {
-        const keys = new Set<Key>();
+        const keys = new Set<KeyId>();
         for (const item of expr.items) {
           for (const key of syncOf(item.expr, seen)) keys.add(key);
           if (!nullableOf(item.expr)) break;
@@ -604,7 +648,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       case "and":
       case "not":
       case "cut":
-        return new Set();
+        return new Set<KeyId>();
       case "precedence": {
         const keys = syncOf(expr.atom, seen);
         for (const level of expr.levels) for (const operator of level.operators) {
@@ -673,7 +717,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
             item: last.e,
             shape,
             field: shape === "field" ? label : null,
-            sync: syncOf(last.e, new Set()),
+            sync: toBits(syncOf(last.e, new Set())),
             min: last.t === "plus" ? 1 : 0,
             guarded: sequence.items.some((item) => {
               if (item.expr === last) return false;
@@ -694,19 +738,19 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       case "cut":
         return expr;
       case "ref":
-        return { ...expr, first: firstRule[expr.rule] ?? new Set<Key>(), nullable: nullableRule[expr.rule] ?? false };
+        return { ...expr, first: toBits(firstRule[expr.rule] ?? []), nullable: nullableRule[expr.rule] ?? false };
       case "seq":
         return {
           ...expr,
           items: expr.items.map((item) => ({ ...item, expr: annotate(item.expr) })),
-          first: firstOf(expr),
+          first: toBits(firstOf(expr)),
           nullable: nullableOf(expr),
         };
       case "alt":
         return {
           ...expr,
           alts: expr.alts.map(annotate),
-          first: firstOf(expr),
+          first: toBits(firstOf(expr)),
           nullable: nullableOf(expr),
         };
       case "star":
@@ -714,22 +758,22 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         return {
           ...expr,
           e: annotate(expr.e),
-          first: firstOf(expr),
+          first: toBits(firstOf(expr)),
           nullable: expr.t === "star" || nullableOf(expr.e),
           recover: recoverTarget === expr,
-          sync: recoverTarget === expr ? syncOf(expr.e, new Set()) : new Set<Key>(),
+          sync: recoverTarget === expr ? toBits(syncOf(expr.e, new Set())) : EMPTY_BITS,
         };
       case "opt":
-        return { ...expr, e: annotate(expr.e), first: firstOf(expr.e), nullable: true };
+        return { ...expr, e: annotate(expr.e), first: toBits(firstOf(expr.e)), nullable: true };
       case "and":
       case "not":
-        return { ...expr, e: annotate(expr.e), first: new Set<Key>(), nullable: true };
+        return { ...expr, e: annotate(expr.e), first: EMPTY_BITS, nullable: true };
       case "sep":
         return {
           ...expr,
           item: annotate(expr.item),
           separator: annotate(expr.separator),
-          first: firstOf(expr.item),
+          first: toBits(firstOf(expr.item)),
           nullable: expr.min === 0 || nullableOf(expr.item),
         };
       case "precedence":
@@ -738,10 +782,10 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
           levels: expr.levels.map((level) => ({
             ...level,
             operators: level.operators.map(annotate),
-            first: union(level.operators.map(firstOf)),
+            first: toBits(union(level.operators.map(firstOf))),
           })),
           atom: annotate(expr.atom),
-          first: firstOf(expr),
+          first: toBits(firstOf(expr)),
           nullable: nullableOf(expr),
         };
     }
@@ -1013,31 +1057,79 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
   });
 
   const symbols = [...context.symbols].sort((a, b) => b.length - a.length);
-  const symbolsByFirst = new Map<string, string[]>();
+  const singleSymbols: (SymbolSpec | undefined)[] = new Array(128);
+  const multiSymbolsByFirst = new Map<number, SymbolSpec[]>();
   for (const symbol of symbols) {
-    const first = symbol[0]!;
-    const list = symbolsByFirst.get(first);
-    if (list) list.push(symbol);
-    else symbolsByFirst.set(first, [symbol]);
+    const entry = { text: symbol, keyId: intern(`symbol:${symbol}`) };
+    if (symbol.length === 1 && symbol.charCodeAt(0) < 128) {
+      singleSymbols[symbol.charCodeAt(0)] = entry;
+      continue;
+    }
+    const first = symbol.charCodeAt(0);
+    const list = multiSymbolsByFirst.get(first);
+    if (list) list.push(entry);
+    else multiSymbolsByFirst.set(first, [entry]);
   }
-  const skipSources = file.skips.map((skip) => decodePattern(skip.pattern.text));
+  const fastWhitespace = skipSources.some(isFastWhitespace);
+  const fastLineComment = skipSources.some(isFastLineComment);
+  const fastBlockComment = skipSources.some(isFastBlockComment);
+  const slowSkips = skips.filter((_, index) => {
+    const source = skipSources[index]!;
+    return !(isFastWhitespace(source) || isFastLineComment(source) || isFastBlockComment(source));
+  });
+  const keywordIds = new Map<string, KeyId>();
+  let maxKeywordLength = 0;
+  for (const keyword of context.keywords) {
+    const keyId = intern(`word:${keyword}`);
+    keywordIds.set(keyword, keyId);
+    if (keyword.length > maxKeywordLength) maxKeywordLength = keyword.length;
+  }
+  const keywordCandidates: (SymbolSpec[] | undefined)[] = new Array(maxKeywordLength + 1);
+  for (const [keyword, keyId] of keywordIds) {
+    const list = keywordCandidates[keyword.length] ?? (keywordCandidates[keyword.length] = []);
+    list.push({ text: keyword, keyId });
+  }
+  const wordKeyId = intern("word");
+  const eofKeyId = intern("eof");
+  const errorKeyId = intern("error");
+  const ruleOf = new Int32Array(keyText.length).fill(-1);
+  for (let index = 0; index < context.tokens.size; index++) {
+    ruleOf[[...context.tokens.values()][index]!.keyId] = index;
+  }
+  for (let index = 0; index < context.inline.length; index++) {
+    ruleOf[context.inline[index]!.keyId] = index;
+  }
   const spec: GrammarSpec = {
     name: text(file.name),
     skips,
+    slowSkips,
     word: wordRegex,
     wordSource,
     tokens: [...context.tokens.values()],
     inline: context.inline,
     symbols,
-    symbolsByFirst,
-    fastWhitespace: skipSources.some((source) => source.startsWith("\\s") || source.startsWith("[\\s")),
-    fastLineComment: skipSources.some((source) => source.includes("//")),
-    fastBlockComment: skipSources.some((source) => source.includes("/*") && source.includes("*/")),
+    singleSymbols,
+    multiSymbolsByFirst,
+    keyText,
+    ruleOf,
+    wordKeyId,
+    eofKeyId,
+    errorKeyId,
+    keywordIds,
+    keywordCandidates,
+    maxKeywordLength,
+    wordHighlight: highlightCode("variable"),
+    keywordHighlight: highlightCode("keyword"),
+    symbolHighlight: highlightCode("operator"),
+    regexHighlight: highlightCode("regexp"),
+    fastWhitespace,
+    fastLineComment,
+    fastBlockComment,
     asciiWord: wordSource === "[A-Za-z_][A-Za-z0-9_]*",
     keywords: context.keywords,
     rules: ruleSpecs,
     root: rootIndex,
-    rootFirst: firstRule[rootIndex] ?? new Set(),
+    rootFirst: toBits(firstRule[rootIndex] ?? []),
     incremental,
   };
 
@@ -1057,7 +1149,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         return {
           ok: false,
           value: null,
-          tokens: list.tokens,
+          tokens: list,
           trivia: list.trivia,
           diagnostics: sorted,
         };
@@ -1066,8 +1158,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     },
     lex: (source: string) => lexTokens(spec, source),
     highlight: (source: string) => highlightOfSource(spec, source),
-    highlightTokens: (tokens: readonly LexToken[], trivia: readonly Trivia[]) =>
-      highlightOfTokens(spec, { tokens, trivia }),
+    highlightTokens: (tokens: TokenList) => highlightOfTokens(spec, tokens),
   };
 };
 
@@ -1098,19 +1189,22 @@ const inspectUnaryTags = (unary: Unary, visit: (alts: readonly Alternative[]) =>
   }
 };
 
-const highlightOfSource = (spec: GrammarSpec, source: string): readonly Token[] =>
+const highlightOfSource = (spec: GrammarSpec, source: string): Token[] =>
   highlightOfTokens(spec, lexTokens(spec, source));
 
-const highlightOfTokens = (spec: GrammarSpec, list: TokenList): readonly Token[] => {
+const highlightOfTokens = (spec: GrammarSpec, list: TokenList): Token[] => {
   void spec;
   const tokens: Token[] = [];
-  for (const trivia of list.trivia) {
-    if (trivia.kind !== "comment") continue;
-    tokens.push({ span: trivia.span, kind: "comment" });
+  const trivia = list.trivia;
+  for (let index = 0; index < trivia.length; index++) {
+    if (trivia.kind[index] !== 1) continue;
+    tokens.push({ span: { start: trivia.start[index]!, end: trivia.end[index]! }, kind: "comment" });
   }
-  for (const token of list.tokens) {
-    if (token.kind === "eof" || token.kind === "error" || token.highlight === null) continue;
-    tokens.push({ span: token.span, kind: token.highlight });
+  for (let index = 0; index < list.length; index++) {
+    const kind = list.kindAt(index);
+    const highlight = list.highlightAt(index);
+    if (kind === EOF || kind === ERROR || highlight === 0) continue;
+    tokens.push({ span: { start: list.start[index]!, end: list.end[index]! }, kind: tokenKinds[highlight - 1]! });
   }
   return tokens.sort((a, b) => a.span.start - b.span.start || a.span.end - b.span.end);
 };

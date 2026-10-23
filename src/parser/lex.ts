@@ -1,4 +1,6 @@
-import type { GrammarSpec, Key, LexToken, TokenList, Trivia } from "./spec.ts";
+import type { GrammarSpec, KeyId } from "./spec.ts";
+import { EOF, ERROR, REGEX, SYMBOL, TOKEN, TokenBuilder, TriviaBuilder, WORD } from "./tokens.ts";
+import type { TokenList } from "./tokens.ts";
 
 const anchored = (pattern: RegExp, source: string, offset: number): string | undefined => {
   pattern.lastIndex = offset;
@@ -18,55 +20,60 @@ const isWordPart = (code: number): boolean => isWordStart(code) || (code >= 48 &
  * Lex from a token boundary. `stop` runs after each token and can end the run
  * early; a stopped run has no eof token.
  */
-export const lexFrom = (
+/** Lex into caller-provided builders. Pushes eof only when it reaches the end. */
+export const lexInto = (
   spec: GrammarSpec,
   source: string,
   start: number,
-  stop?: (tokens: readonly LexToken[], offset: number) => boolean,
-): TokenList => {
-  const tokens: LexToken[] = [];
-  const trivia: Trivia[] = [];
-  const tokenKeys = spec.tokens.map((token) => `token:${token.name}` as Key);
-  const regexKeys = spec.inline.map((_, index) => `regex:${index}` as Key);
-  const symbolKeys = new Map(spec.symbols.map((symbol) => [symbol, `symbol:${symbol}` as Key]));
-  const wordKeys = new Map<string, Key>();
-  const wordKey = (word: string): Key => {
-    let key = wordKeys.get(word);
-    if (key === undefined) {
-      key = `word:${word}`;
-      wordKeys.set(word, key);
-    }
-    return key;
-  };
+  tokens: TokenBuilder,
+  trivia: TriviaBuilder,
+  stop?: (tokens: TokenBuilder, offset: number) => boolean,
+): void => {
+  const singleSymbols = spec.singleSymbols;
+  const multiSymbolsByFirst = spec.multiSymbolsByFirst;
+  const keywordCandidates = spec.keywordCandidates;
+  const maxKeywordLength = spec.maxKeywordLength;
+  const wordKeyId = spec.wordKeyId;
+  const slowSkips = spec.slowSkips;
+  const tokenSpecs = spec.tokens;
+  const inlineSpecs = spec.inline;
+  const length = source.length;
   let offset = start;
-  while (offset < source.length) {
+  while (offset < length) {
     const triviaStart = offset;
     let sawComment = false;
-    for (;;) {
+    if (spec.fastWhitespace && slowSkips.length === 0 && !spec.fastBlockComment) {
+      for (;;) {
+        const before = offset;
+        while (offset < length && isSpace(source.charCodeAt(offset))) offset++;
+        if (spec.fastLineComment && source.charCodeAt(offset) === 47 && source.charCodeAt(offset + 1) === 47) {
+          offset += 2;
+          while (offset < length && source.charCodeAt(offset) !== 10 && source.charCodeAt(offset) !== 13) offset++;
+          sawComment = true;
+        }
+        if (offset === before) break;
+      }
+    } else for (;;) {
       let moved = false;
       if (spec.fastWhitespace) {
         const before = offset;
-        while (offset < source.length && isSpace(source.charCodeAt(offset))) offset++;
+        while (offset < length && isSpace(source.charCodeAt(offset))) offset++;
         moved = offset > before;
       }
-      if (
-        spec.fastLineComment && source.charCodeAt(offset) === 47 && source.charCodeAt(offset + 1) === 47
-      ) {
+      if (spec.fastLineComment && source.charCodeAt(offset) === 47 && source.charCodeAt(offset + 1) === 47) {
         offset += 2;
-        while (offset < source.length && source.charCodeAt(offset) !== 10 && source.charCodeAt(offset) !== 13) offset++;
+        while (offset < length && source.charCodeAt(offset) !== 10 && source.charCodeAt(offset) !== 13) offset++;
         sawComment = true;
         moved = true;
       }
-      if (
-        spec.fastBlockComment && source.charCodeAt(offset) === 47 && source.charCodeAt(offset + 1) === 42
-      ) {
+      if (spec.fastBlockComment && source.charCodeAt(offset) === 47 && source.charCodeAt(offset + 1) === 42) {
         const close = source.indexOf("*/", offset + 2);
-        offset = close < 0 ? source.length : close + 2;
+        offset = close < 0 ? length : close + 2;
         sawComment = true;
         moved = true;
       }
-      for (const pattern of spec.skips) {
-        const text = anchored(pattern, source, offset);
+      for (let index = 0; index < slowSkips.length; index++) {
+        const text = anchored(slowSkips[index]!, source, offset);
         if (text === undefined) continue;
         const trimmed = text.trimStart();
         if (trimmed.startsWith("//") || trimmed.startsWith("/*")) sawComment = true;
@@ -77,106 +84,157 @@ export const lexFrom = (
       if (!moved) break;
     }
     if (offset > triviaStart) {
-      trivia.push({ span: { start: triviaStart, end: offset }, kind: sawComment ? "comment" : "space" });
-      if (offset >= source.length) break;
+      trivia.push(triviaStart, offset, sawComment);
+      if (offset >= length) break;
     }
 
-    let token: LexToken | undefined;
+    let kind = -1;
+    let keyId: KeyId = 0;
+    let end = offset;
+    let highlight = 0;
     const code = source.charCodeAt(offset);
-    for (let index = 0; index < spec.tokens.length; index++) {
-      const rule = spec.tokens[index]!;
-      if (rule.first !== null && (code >= 128 || rule.first[code] === 0)) continue;
-      const text = anchored(rule.regex, source, offset);
+    const tokenCount = tokenSpecs.length;
+    for (let index = 0; index < tokenCount; index++) {
+      const spec0 = tokenSpecs[index]!;
+      if (spec0.fast !== 0) {
+        let scan = offset;
+        while (scan < length) {
+          const digit = source.charCodeAt(scan) - 48;
+          if (digit < 0 || digit > 9) break;
+          scan++;
+        }
+        if (scan === offset) continue;
+        if (spec0.fast === 2 && source.charCodeAt(scan) === 46) {
+          let fraction = scan + 1;
+          while (fraction < length) {
+            const digit = source.charCodeAt(fraction) - 48;
+            if (digit < 0 || digit > 9) break;
+            fraction++;
+          }
+          if (fraction > scan + 1) scan = fraction;
+        }
+        kind = TOKEN;
+        keyId = spec0.keyId;
+        end = scan;
+        highlight = spec0.highlightCode;
+        break;
+      }
+      if (spec0.first !== null && (code >= 128 || spec0.first[code] === 0)) continue;
+      const text = anchored(spec0.regex, source, offset);
       if (text === undefined) continue;
-      token = {
-        kind: "token",
-        text,
-        span: { start: offset, end: offset + text.length },
-        key: tokenKeys[index]!,
-        name: rule.name,
-        index,
-        highlight: rule.highlight,
-      };
+      kind = TOKEN;
+      keyId = spec0.keyId;
+      end = offset + text.length;
+      highlight = spec0.highlightCode;
       break;
     }
-    if (!token) {
-      for (let index = 0; index < spec.inline.length; index++) {
-        const rule = spec.inline[index]!;
-        const text = anchored(rule.regex, source, offset);
+    if (kind < 0) {
+      const inlineCount = inlineSpecs.length;
+      for (let index = 0; index < inlineCount; index++) {
+        const spec0 = inlineSpecs[index]!;
+        const text = anchored(spec0.regex, source, offset);
         if (text === undefined) continue;
-        token = {
-          kind: "regex",
-          text,
-          span: { start: offset, end: offset + text.length },
-          key: regexKeys[index]!,
-          index,
-          highlight: "regexp",
-        };
+        kind = REGEX;
+        keyId = spec0.keyId;
+        end = offset + text.length;
+        highlight = spec.regexHighlight;
         break;
       }
     }
-    if (!token) {
-      let word: string | undefined;
+    if (kind < 0) {
       if (spec.asciiWord) {
-        if (isWordStart(source.charCodeAt(offset))) {
-          const start = offset++;
-          while (offset < source.length && isWordPart(source.charCodeAt(offset))) offset++;
-          word = source.slice(start, offset);
+        if (isWordStart(code)) {
+          const wordStart = offset++;
+          while (offset < length && isWordPart(source.charCodeAt(offset))) offset++;
+          const wordEnd = offset;
+          offset = wordStart;
+          let keyword = -1;
+          const wordLength = wordEnd - wordStart;
+          if (wordLength <= maxKeywordLength) {
+            const candidates = keywordCandidates[wordLength];
+            if (candidates !== undefined) {
+              for (let index = 0; index < candidates.length; index++) {
+                const candidate = candidates[index]!;
+                if (source.startsWith(candidate.text, wordStart)) {
+                  keyword = candidate.keyId;
+                  break;
+                }
+              }
+            }
+          }
+          kind = WORD;
+          keyId = keyword < 0 ? wordKeyId : keyword;
+          end = wordEnd;
+          highlight = keyword < 0 ? spec.wordHighlight : spec.keywordHighlight;
         }
       } else {
-        word = anchored(spec.word, source, offset);
-        if (word !== undefined) offset += word.length;
-      }
-      if (word !== undefined) {
-        token = {
-          kind: "word",
-          text: word,
-          span: { start: offset - word.length, end: offset },
-          key: wordKey(word),
-          highlight: spec.keywords.has(word) ? "keyword" : "variable",
-        };
-      }
-    }
-    if (!token) {
-      const candidates = spec.symbolsByFirst.get(source[offset]!) ?? [];
-      for (const symbol of candidates) {
-        if (!source.startsWith(symbol, offset)) continue;
-        token = {
-          kind: "symbol",
-          text: symbol,
-          span: { start: offset, end: offset + symbol.length },
-          key: symbolKeys.get(symbol)!,
-          highlight: "operator",
-        };
-        break;
+        const word = anchored(spec.word, source, offset);
+        if (word !== undefined) {
+          let keyword = -1;
+          if (word.length <= maxKeywordLength) {
+            const candidates = keywordCandidates[word.length];
+            if (candidates !== undefined) {
+              for (let index = 0; index < candidates.length; index++) {
+                if (candidates[index]!.text === word) {
+                  keyword = candidates[index]!.keyId;
+                  break;
+                }
+              }
+            }
+          }
+          kind = WORD;
+          keyId = keyword < 0 ? wordKeyId : keyword;
+          end = offset + word.length;
+          highlight = keyword < 0 ? spec.wordHighlight : spec.keywordHighlight;
+        }
       }
     }
-    if (!token) {
+    if (kind < 0) {
+      const candidates = multiSymbolsByFirst.get(code);
+      if (candidates !== undefined) {
+        for (let index = 0; index < candidates.length; index++) {
+          const entry = candidates[index]!;
+          if (!source.startsWith(entry.text, offset)) continue;
+          kind = SYMBOL;
+          keyId = entry.keyId;
+          end = offset + entry.text.length;
+          highlight = spec.symbolHighlight;
+          break;
+        }
+      }
+      if (kind < 0) {
+        const single = code < 128 ? singleSymbols[code] : undefined;
+        if (single !== undefined) {
+          kind = SYMBOL;
+          keyId = single.keyId;
+          end = offset + 1;
+          highlight = spec.symbolHighlight;
+        }
+      }
+    }
+    if (kind < 0) {
       const point = source.codePointAt(offset)!;
-      const text = String.fromCodePoint(point);
-      token = {
-        kind: "error",
-        text,
-        span: { start: offset, end: offset + text.length },
-        key: `symbol:${text}`,
-        highlight: null,
-      };
+      kind = ERROR;
+      keyId = spec.errorKeyId;
+      end = offset + (point > 0xffff ? 2 : 1);
     }
-    tokens.push(token);
-    offset = token.span.end;
-    if (stop !== undefined && stop(tokens, offset)) return { tokens, trivia };
+    tokens.push(kind, keyId, offset, end, highlight);
+    offset = end;
+    if (stop !== undefined && stop(tokens, offset)) return;
   }
-  tokens.push({
-    kind: "eof",
-    text: "",
-    span: { start: source.length, end: source.length },
-    key: "eof",
-    highlight: null,
-  });
-  return { tokens, trivia };
+  tokens.push(EOF, spec.eofKeyId, length, length, 0);
 };
 
-export const lex = (spec: GrammarSpec, source: string): TokenList => {
-  const run = lexFrom(spec, source, 0);
-  return { tokens: run.tokens, trivia: run.trivia };
+export const lexFrom = (
+  spec: GrammarSpec,
+  source: string,
+  start: number,
+  stop?: (tokens: TokenBuilder, offset: number) => boolean,
+): TokenList => {
+  const tokens = new TokenBuilder(source.length >> 2);
+  const trivia = new TriviaBuilder(source.length >> 4);
+  lexInto(spec, source, start, tokens, trivia, stop);
+  return tokens.finish(source, trivia, spec);
 };
+
+export const lex = (spec: GrammarSpec, source: string): TokenList => lexFrom(spec, source, 0);

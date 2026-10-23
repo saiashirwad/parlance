@@ -3,7 +3,7 @@ import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
 import type { ParseResult } from "./parser/parse.ts";
-import type { LexToken, Trivia } from "./parser/spec.ts";
+import type { TokenList, TriviaList } from "./parser/tokens.ts";
 import type { Span } from "./source.ts";
 import type { TsDoc } from "./ts/index.ts";
 
@@ -69,8 +69,8 @@ export type Analysis<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly tree: Ast | null;
   readonly ir: Ir | null;
   readonly tokens: readonly Token[];
-  readonly lex: readonly LexToken[];
-  readonly trivia: readonly Trivia[];
+  readonly lex: TokenList;
+  readonly trivia: TriviaList;
   readonly diagnostics: readonly Diagnostic[];
   readonly facts: Facts<Type>;
   readonly valid: boolean;
@@ -104,11 +104,10 @@ export const analyzeParsed = <Ast, Ir, Type>(
   incremental: IncrementalStats | null = null,
   context: AnalysisContext<Type> = {},
 ): Analysis<Ast, Ir, Type> => {
-  const lexical = language.grammar.highlightTokens(parsed.tokens, parsed.trivia);
   const checker = new Checker<Type>(
     uri,
     source,
-    lexical,
+    [],
     [...parsed.diagnostics, ...(context.diagnostics ?? [])],
     context.dependencies ?? [],
   );
@@ -125,10 +124,20 @@ export const analyzeParsed = <Ast, Ir, Type>(
     }
   }
   const diagnostics = sortDiagnostics(checker.facts.diagnostics);
+  let tokenCache: Token[] | null = null;
+  const tokens = (): Token[] => {
+    if (tokenCache === null) {
+      const lexical = language.grammar.highlightTokens(parsed.tokens);
+      tokenCache = [...semanticTokens({ ...checker.facts, diagnostics: [...diagnostics], tokens: lexical })];
+    }
+    return tokenCache;
+  };
   const facts: Facts<Type> = {
     ...checker.facts,
     diagnostics: [...diagnostics],
-    tokens: [...semanticTokens({ ...checker.facts, diagnostics: [...diagnostics] })],
+    get tokens() {
+      return tokens();
+    },
   };
   return {
     language,
@@ -136,7 +145,9 @@ export const analyzeParsed = <Ast, Ir, Type>(
     source,
     tree: parsed.value as Ast | null,
     ir,
-    tokens: facts.tokens,
+    get tokens() {
+      return facts.tokens;
+    },
     lex: parsed.tokens,
     trivia: parsed.trivia,
     diagnostics,

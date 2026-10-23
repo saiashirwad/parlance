@@ -23,6 +23,7 @@
     "check": "node tools/check.ts",
     "typecheck": "tsc --noEmit --runExternalCode",
     "bench": "node tools/bench.ts",
+    "bench:lsp": "node tools/bench-lsp.ts",
     "gen": "node src/grammar/cli.ts",
     "cli": "node src/cli.ts",
     "nvim:smoke": "nvim --headless -u NONE -l tools/nvim-smoke.lua",

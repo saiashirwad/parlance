@@ -122,8 +122,8 @@ const check = (
   assert.deepEqual(result.value, full.value, `${name}: value differs from full parse`);
   assert.deepEqual(result.diagnostics, full.diagnostics, `${name}: diagnostics differ from full parse`);
   assert.equal(result.ok, full.ok, `${name}: ok differs from full parse`);
-  assert.equal(JSON.stringify(result.tokens), JSON.stringify(full.tokens), `${name}: tokens differ`);
-  assert.equal(JSON.stringify(result.trivia), JSON.stringify(full.trivia), `${name}: trivia differ`);
+  assert.equal(JSON.stringify(result.tokens.toArray()), JSON.stringify(full.tokens.toArray()), `${name}: tokens differ`);
+  assert.equal(JSON.stringify(result.trivia.toArray()), JSON.stringify(full.trivia.toArray()), `${name}: trivia differ`);
   const items = itemsOf(spec, result.value);
   assert.equal(
     result.stats.reused + result.stats.reparsed,
@@ -554,6 +554,7 @@ test("reparse never mutates the previous result", () => {
   const previous = calc.parse(program);
   const freeze = (value: unknown): void => {
     if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+    if (ArrayBuffer.isView(value)) return;
     Object.freeze(value);
     for (const child of Object.values(value)) freeze(child);
   };
@@ -574,8 +575,8 @@ test("mutate shifts the previous tree in place", () => {
   const full = calc.parse(source);
   assert.deepEqual(result.value, full.value);
   assert.deepEqual(result.diagnostics, full.diagnostics);
-  assert.equal(JSON.stringify(result.tokens), JSON.stringify(full.tokens));
-  assert.equal(JSON.stringify(result.trivia), JSON.stringify(full.trivia));
+  assert.equal(JSON.stringify(result.tokens.toArray()), JSON.stringify(full.tokens.toArray()));
+  assert.equal(JSON.stringify(result.trivia.toArray()), JSON.stringify(full.trivia.toArray()));
 });
 
 test("grammars without incremental support fall back to a full parse", () => {
@@ -651,16 +652,16 @@ const randomEdit = (source: string, items: readonly Item[], random: () => number
   const item = pick(random, items);
   const choice = random();
   if (choice < 0.3) {
-    const tokens = calc.lex(source).tokens.filter((token) =>
-      token.span.start >= item.span.start
-      && token.span.end <= item.span.end
+    const tokens = calc.lex(source).toArray().filter((token) =>
+      token.start >= item.span.start
+      && token.end <= item.span.end
       && (token.kind === "token" || (token.kind === "word" && !calc.spec.keywords.has(token.text)))
     );
     if (tokens.length > 0) {
       const token = pick(random, tokens);
       return {
-        start: token.span.start,
-        end: token.span.end,
+        start: token.start,
+        end: token.end,
         insert: token.kind === "token" ? pick(random, ["7", "123", "3.5"]) : pick(random, names),
       };
     }

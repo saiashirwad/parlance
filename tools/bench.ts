@@ -53,7 +53,7 @@ const measure = (name: string, grammar: CompiledGrammar<any>, source: string, ed
   return {
     name,
     bytes: source.length,
-    tokens: lexical.tokens.length,
+    tokens: lexical.length,
     lexMs,
     parseMs,
     mbPerSecond: source.length / 1e6 / (parseMs / 1000),

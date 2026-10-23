@@ -19,9 +19,9 @@ word /[a-z]+/
 root File
 rule File = { word };
 `);
-  const tokens = grammar.lex("abc").tokens;
+  const tokens = grammar.lex("abc").toArray();
   assert.deepEqual(
-    tokens.map((token) => [token.kind, token.text, token.span.start, token.span.end]),
+    tokens.map((token) => [token.kind, token.text, token.start, token.end]),
     [["word", "abc", 0, 3], ["eof", "", 3, 3]],
   );
 });
@@ -34,9 +34,23 @@ word /[a-z]+/
 root File
 rule File = { items:word* };
 `);
-  const tokens = grammar.lex("ab cd\n ef").tokens;
+  const tokens = grammar.lex("ab cd\n ef").toArray();
   assert.deepEqual(
-    tokens.map((token) => [token.kind, token.text, token.span.start, token.span.end]),
+    tokens.map((token) => [token.kind, token.text, token.start, token.end]),
     [["word", "ab", 0, 2], ["word", "cd", 3, 5], ["word", "ef", 7, 9], ["eof", "", 9, 9]],
+  );
+});
+
+test("a grammar without a whitespace skip keeps spaces as errors", () => {
+  const grammar = compile(`
+grammar Tight
+word /[a-z]+/
+root File
+rule File = { word };
+`);
+  const tokens = grammar.lex("a b").toArray();
+  assert.deepEqual(
+    tokens.map((token) => [token.kind, token.text]),
+    [["word", "a"], ["error", " "], ["word", "b"], ["eof", ""]],
   );
 });

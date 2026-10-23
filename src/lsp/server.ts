@@ -32,9 +32,7 @@ import type { Span } from "../source.ts";
 import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
 import { reparse, type IncrementalStats } from "../parser/incremental.ts";
-import type { LexToken } from "../parser/spec.ts";
-
-const kindIndex = new Map(tokenKinds.map((kind, index) => [kind, index]));
+import { encodeAnalysis, folding } from "./semantic.ts";
 
 const symbolKind = (definition: Definition): SymbolKind => {
   switch (definition.kind) {
@@ -74,62 +72,6 @@ const range = (document: TextDocument, span: Span): Range => ({
   start: document.positionAt(span.start),
   end: document.positionAt(span.end),
 });
-
-const encodeTokens = (document: TextDocument, tokens: readonly Token[]): number[] => {
-  const source = document.getText();
-  const parts: { line: number; character: number; length: number; type: number; }[] = [];
-  for (const token of tokens) {
-    const start = Math.max(0, Math.min(source.length, token.span.start));
-    const end = Math.max(start, Math.min(source.length, token.span.end));
-    for (const match of source.slice(start, end).matchAll(/[^\r\n]+/g)) {
-      const position = document.positionAt(start + match.index);
-      parts.push({ ...position, length: match[0].length, type: kindIndex.get(token.kind) ?? 0 });
-    }
-  }
-  parts.sort((a, b) => a.line - b.line || a.character - b.character);
-  const data: number[] = [];
-  let line = 0;
-  let character = 0;
-  let previousEnd = 0;
-  for (const part of parts) {
-    if (part.line === line && part.character < previousEnd) continue;
-    data.push(
-      part.line - line,
-      part.line === line ? part.character - character : part.character,
-      part.length,
-      part.type,
-      0,
-    );
-    line = part.line;
-    character = part.character;
-    previousEnd = character + part.length;
-  }
-  return data;
-};
-
-const folding = (tokens: readonly LexToken[], document: TextDocument): FoldingRange[] => {
-  const stack: { text: string; span: Span; }[] = [];
-  const ranges: FoldingRange[] = [];
-  const pairs: Record<string, string> = { "}": "{", ")": "(", "]": "[" };
-  for (const token of tokens) {
-    if (token.kind !== "symbol") continue;
-    if (token.text === "{" || token.text === "(" || token.text === "[") {
-      stack.push({ text: token.text, span: token.span });
-      continue;
-    }
-    const open = pairs[token.text];
-    if (!open) continue;
-    for (let index = stack.length - 1; index >= 0; index--) {
-      if (stack[index]!.text !== open) continue;
-      const found = stack.splice(index, 1)[0]!;
-      const start = document.positionAt(found.span.start);
-      const end = document.positionAt(token.span.end);
-      if (start.line < end.line) ranges.push({ startLine: start.line, endLine: end.line });
-      break;
-    }
-  }
-  return ranges;
-};
 
 export type ServerOptions = {
   readonly input?: NodeJS.ReadableStream;
@@ -371,8 +313,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   connection.onFoldingRanges(({ textDocument }) => {
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
-    if (!document || !analysis) return [];
-    return folding(analysis.lex, document);
+    const language = languageFor(textDocument.uri);
+    if (!document || !analysis || !language) return [];
+    return folding(analysis.lex, document, language.grammar.spec);
   });
 
   connection.onCompletion(({ textDocument }) => {
@@ -428,7 +371,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     if (!document || !analysis) return { data: [] };
     let data = encoded.get(textDocument.uri);
     if (!data) {
-      data = encodeTokens(document, analysis.tokens);
+      data = encodeAnalysis(document, analysis);
       encoded.set(textDocument.uri, data);
     }
     return { data };

@@ -94,8 +94,8 @@ type CompiledGrammar<Ast> = {
   readonly diagnostics: readonly Diagnostic[];
   parse(source: string, options?: ParseOptions): ParseResult<Ast>;
   lex(source: string): TokenList;
-  highlight(source: string): readonly Token[];
-  highlightTokens(tokens: readonly LexToken[], trivia: readonly Trivia[]): readonly Token[];
+  highlight(source: string): Token[];
+  highlightTokens(tokens: TokenList): Token[];
   readonly spec: GrammarSpec;  // parser tables and the incremental item window
 };
 ```
@@ -105,6 +105,7 @@ The grammar language is itself written in `.parl` and parsed by the compiled gra
 ### Terminals
 
 - `skip` patterns run between tokens. They are not part of nodes but are retained in `TokenList.trivia`.
+- Tokens live in a columnar `TokenList`: parallel typed arrays for kind, interned key, offsets, and highlight. Parsing reads those arrays directly; `at(index)` materializes a `LexToken` only for hosts and tests.
 - `word` is the identifier pattern. Identifier-shaped string literals (`"let"`) are keywords and only match a whole word.
 - `token Name /regex/` adds a named terminal. A token match wins over symbols, identifiers, and keywords in a maximal-munch pass.
 - Any other string literal (`"+"`, `"->"`) is a symbol, matched longest-first.
@@ -370,7 +371,8 @@ src/
     language.ts    .parl as a Language: LSP diagnostics, symbols, navigation, tokens
     grammar.parl   the grammar language in itself
   parser/
-    lex.ts         token array, trivia
+    tokens.ts      columnar token and trivia buffers
+    lex.ts         lexer into the buffers
     parse.ts       token parser, recovery
     incremental.ts reparse + reuse
   check/

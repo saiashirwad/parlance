@@ -20,10 +20,12 @@ The lexer carries no state across tokens. A match reads text before its start on
 `relex` lexes the new source from offset 0 and stops at the first token boundary where three things hold.
 
 - The boundary is at or after `edit.start + edit.insert.length`, so the rest of the new source equals the rest of the old source shifted by `delta`.
-- The new token has the same kind, text, and name as the old token at that boundary.
-- Its span equals the old span shifted by `delta`.
+- The new token has the same kind, key, text, and span as the old token at that boundary, shifted by `delta`.
+- Every token before the window matched the previous stream during the same scan.
 
 From that boundary the lexer sees identical text with no stored state, so the shifted old tail is the exact tokenization. When no boundary qualifies, the run reaches end of file and no tail is reused. The result is still correct, just not incremental on the token side.
+
+The prefix comparison is fused into the lex loop: each token before the window is checked against the old token at the same index as it is produced, so a mismatch aborts the scan without a second pass. Tokens are written once into the final buffer; the reused tail is appended with typed-array `set` and shifted in place when `delta` is not zero. A same-length edit that leaves every token boundary and key unchanged returns a new `TokenList` over the previous arrays with the new source string, so it copies nothing.
 
 Tokens before the edit are not reused. A regex match can reach across the edit even when the grammar has no lookaround. Take `token T /a[^z]*z|a/` on `a; a; a; a;`. Every `a` is a one-character `T` token because no `z` follows. Change the last `a` to `z` and the first `a` becomes one token spanning the whole line. A restart near the edit would keep the stale prefix. Lexing from 0 catches it. The same holds for a greedy `.*` that can absorb a later terminator. A local restart measured 12 ms on the benchmark edit, but it was not sound for these grammars, so it is not in the code.
 
@@ -45,48 +47,47 @@ Lookbehind is the one regex feature that can read text before the resync boundar
 
 When `delta` is 0, no span moves. `reparse` reuses the previous item nodes by reference, the same way it already reuses the items before the window. The result is structurally identical to a full parse and shares nodes with `previous`.
 
-When `delta` is not 0, every span after the edit needs a new number. The value uses plain objects, so the only correct result is a clone with shifted spans. The clone copies keys with `Object.keys` instead of allocating an entry pair per node with `Object.entries`. `mutate: true` still shifts the previous nodes in place and does not allocate.
+When `delta` is not 0, every span after the edit needs a new number. The value uses plain objects, so the only correct result is a clone with shifted spans. The clone walks own keys with `for...in`, which does not allocate a key array per node. `mutate: true` shifts the previous nodes in place and does not allocate.
 
 The root span starts and ends where a full parse would put it, including recovery tokens that the root repetition skipped and a header before the item list.
 
 ## Measurements
 
-Machine: macOS, Node 24.22.0, 2026-10-23. Commands are `pnpm bench` for the table and a throwaway timing copy of `reparse` for the phase split and the other edit positions.
+Machine: macOS, Node 24.22.1, 2026-10-23. Commands are `pnpm bench` for the calc
+and schema tables, `node tools/bench-lsp.ts` for the editor path, and
+`node tools/compare-langkit.mjs` for the head-to-head parser comparison.
 
-Before this work, at 100,000 calc declarations (2.8 MB, 900,006 tokens):
-
-| phase | ms |
-| --- | --- |
-| lex the whole file | 144 |
-| token guard | 15 |
-| select and parse the window | 1.3 |
-| clone the reused tail | 91 |
-| diagnostics and splice | 11 |
-| full parse, for comparison | 250 to 279 |
-
-After, for the benchmark edit (a same-length replacement in the middle):
+At 100,000 calc declarations (2.8 MB, 900,006 tokens), `pnpm bench` reports:
 
 | phase | ms |
-| --- | --- |
-| validation before lexing | 6.3 |
-| lex from 0 to the resync boundary | 68.7 |
-| select and parse the window | 1.7 |
-| shift spans | 0.1 |
-| splice and diagnostics | 2.9 |
-| full parse, for comparison | 219 to 285 |
+| --- | ---: |
+| lex the whole file | 57 |
+| full parse | 126 (22.8 MB/s) |
+| middle edit | 20 (16% of a full parse) |
+| reused items | 99,998 of 100,000 |
 
-Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 105 ms against 227 to 323 ms, or roughly 25% to 38%; a heavily loaded run can approach half. The added prefix/suffix guards and machine load move both numbers. Treat the ratio as an order of magnitude, never a fixed promise.
+The old comparison grammar (4.18 MB, 1,000,001 tokens) measures 54 ms, or
+77 MB/s, and a middle edit takes 14.6 ms (27% of a full parse). The old langkit
+parserator parser measures 102 ms on the same corpus.
 
-The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
+The edit path is still linear in the distance from offset 0 to the edit, because
+the token stream is re-lexed from the start. The fused prefix check and typed
+array copies cut the constant, but a middle edit still scans half the file.
+Removing that needs resumable lexer state or a static proof that no token regex
+can reach across a boundary; a local restart was measured at 12 ms but was not
+sound for `token T /a[^z]*z|a/` and similar grammars.
 
-| edit | ms |
-| --- | --- |
-| same-length, offset 4 | 13.7 |
-| same-length, middle | 79.7 |
-| same-length, last line | 130 |
-| one character inserted, middle | 154 |
+`node tools/bench-lsp.ts` measures the editor path on the same corpus:
 
-A full parse of the same file measured 219 to 285 ms across runs. An insertion pays two extra costs. The reused tail tokens and trivia need shifted copies, and every AST span after the edit is cloned. On the same file the AST clone alone measured 63 ms. The remaining bottleneck for suffix edits is the prefix lex. It is linear in the distance from the start of the file to the edit. Removing it needs either a lexer with resumable state or a proof that a grammar's token regexes cannot reach across a boundary. `mutate: true` avoids the AST clone for the LSP.
+| corpus | full analyze | edit + analyze | semantic tokens | folding |
+| --- | ---: | ---: | ---: | ---: |
+| 2,000 declarations (50 KB) | 6.0 ms | 1.6 ms | 0.7 ms | 0.05 ms |
+| 20,000 declarations (543 KB) | 33.5 ms | 12.0 ms | 6.4 ms | 0.5 ms |
+| 100,000 declarations (2.8 MB) | 217 ms | 94 ms | 43 ms | 2.6 ms |
+
+`analyzeParsed` leaves semantic tokens lazy, so a keystroke does not pay for
+them. On the 100k file the edit path is mostly the language checker (about
+70 ms) rather than reparse (about 19 ms).
 
 ## Verification
 
@@ -96,6 +97,7 @@ pnpm test
 pnpm typecheck
 node tools/check.ts --bench             # 14 steps, including the LSP edit scenario
 pnpm bench
+pnpm bench:lsp
 ```
 
 `tests/incremental.test.ts` compares value, diagnostics, `ok`, tokens, and trivia against a full parse for every edit. It also freezes `previous` and checks that no node moved.
