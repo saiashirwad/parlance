@@ -350,7 +350,7 @@ One package, `@parlance/ts-host`, for every project:
 - document symbols (from definitions)
 - folding ranges (matching bracket tokens)
 - completion (grammar keywords + top-level definitions; local-scope completion awaits recorded scope ranges)
-- rename (single file)
+- cross-file definition, references, and rename through the module graph
 
 Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file references.
 

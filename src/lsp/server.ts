@@ -169,6 +169,36 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     return source === undefined ? undefined : TextDocument.create(uri, "guest", 0, source);
   };
 
+  /** References to the same definition across every analyzed document. */
+  const referencesTo = (target: Definition, currentUri: string): { uri: string; span: Span; }[] => {
+    const targetUri = target.uri ?? currentUri;
+    const found: { uri: string; span: Span; }[] = [];
+    for (const uri of graph.watched()) {
+      const node = graph.node(uri);
+      if (!node) continue;
+      const definitions = new Map(node.analysis.facts.definitions.map((definition) => [definition.id, definition]));
+      for (const reference of node.analysis.facts.references) {
+        const definition = definitions.get(reference.id);
+        if (!definition) continue;
+        const definitionUri = definition.uri ?? uri;
+        if (definitionUri !== targetUri) continue;
+        if (definition.span.start !== target.span.start || definition.span.end !== target.span.end) continue;
+        found.push({ uri, span: reference.span });
+      }
+    }
+    return found;
+  };
+
+  const uniqueSpans = (spans: readonly Span[]): Span[] => {
+    const seen = new Set<string>();
+    return spans.filter((span) => {
+      const key = `${span.start}:${span.end}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
   connection.onInitialize(() => ({
     capabilities: {
       positionEncoding: PositionEncodingKind.UTF16,
@@ -282,13 +312,23 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     if (!document || !analysis) return [];
     const definition = definitionAt(analysis.facts, document.offsetAt(position));
     if (!definition) return [];
-    const locations = analysis.facts.references
-      .filter((reference) => reference.id === definition.id)
-      .map((reference) => ({ uri: document.uri, range: range(document, reference.span) }));
-    if (context.includeDeclaration && (definition.uri === undefined || definition.uri === document.uri)) {
-      locations.unshift({ uri: document.uri, range: range(document, definition.span) });
+    const targetUri = definition.uri ?? document.uri;
+    const locations: { uri: string; range: Range; }[] = [];
+    if (context.includeDeclaration) {
+      const target = documentAt(targetUri);
+      if (target) locations.push({ uri: targetUri, range: range(target, definition.span) });
     }
-    return locations;
+    for (const reference of referencesTo(definition, document.uri)) {
+      const target = documentAt(reference.uri);
+      if (target) locations.push({ uri: reference.uri, range: range(target, reference.span) });
+    }
+    const seen = new Set<string>();
+    return locations.filter((location) => {
+      const key = `${location.uri}:${location.range.start.line}:${location.range.start.character}:${location.range.end.line}:${location.range.end.character}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   });
 
   connection.onDocumentSymbol(({ textDocument }) => {
@@ -341,17 +381,22 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     if (!document || !analysis) return null;
     const definition = definitionAt(analysis.facts, document.offsetAt(position));
     if (!definition) return null;
-    if (definition.uri !== undefined && definition.uri !== document.uri) return null;
-    const spans = [
-      definition.span,
-      ...analysis.facts.references.filter((reference) => reference.id === definition.id).map((reference) => reference.span),
-    ].filter((span, index, all) => all.findIndex((other) => other.start === span.start && other.end === span.end) === index);
-    const edit: WorkspaceEdit = {
-      changes: {
-        [document.uri]: spans.map((span) => ({ range: range(document, span), newText: newName })),
-      },
+    const targetUri = definition.uri ?? document.uri;
+    const byUri = new Map<string, Span[]>();
+    const add = (uri: string, span: Span) => {
+      const spans = byUri.get(uri);
+      if (spans) spans.push(span);
+      else byUri.set(uri, [span]);
     };
-    return edit;
+    add(targetUri, definition.span);
+    for (const reference of referencesTo(definition, document.uri)) add(reference.uri, reference.span);
+    const changes: NonNullable<WorkspaceEdit["changes"]> = {};
+    for (const [uri, spans] of byUri) {
+      const target = documentAt(uri);
+      if (!target) continue;
+      changes[uri] = uniqueSpans(spans).map((span) => ({ range: range(target, span), newText: newName }));
+    }
+    return { changes };
   });
 
   connection.languages.semanticTokens.on(({ textDocument }) => {

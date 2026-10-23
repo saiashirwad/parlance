@@ -38,7 +38,7 @@ End state:
 - CLI prints `ok` for both entries.
 - SQL contains `CREATE TABLE "User"`, `CREATE TABLE "Post"`, and `CREATE TABLE "Catalog"` with `"owner" INTEGER NOT NULL REFERENCES "User"("id")`.
 - The loader prints `250 true`; catalog prints `1 1 Tools`.
-- `tests/modules.test.ts` passes 8 tests, including a cycle and a duplicate-export diagnostic at the second specifier.
+- `tests/modules.test.ts` passes 9 tests, including a cycle, a duplicate-export diagnostic at the second specifier, and cross-file field/member navigation.
 - The LSP test resolves the definition to `blog.schema` line 1.
 
 ## Gotchas
@@ -46,7 +46,7 @@ End state:
 - Specifiers are URL-relative. There is no package/bare-specifier resolution and no named import list.
 - An import exposes every export of the dependency; two dependencies exporting the same name are a diagnostic in calc and resolve to the first in schema.
 - Machine recognizes and analyzes imports but does not merge events or states yet.
-- Cross-file references and rename remain single-file; only definition crosses documents.
+- Cross-file references and rename match definitions by URI and span across every analyzed node; open documents are the source when available.
 - Content mapper `watchedFiles` comes from the recursive guest scan under the config root, so an import outside that root is analyzed but not watched.
 - The graph caches by URI and source text. A dependency changed on disk is picked up when the entry is analyzed again; open LSP documents refresh on their next edit.
 - Imported schema declarations have no source mappings in the importer's TS surface; a mapping must stay inside the transformed document.

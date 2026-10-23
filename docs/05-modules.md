@@ -176,9 +176,7 @@ Warnings are routed too. Info diagnostics stay local.
   recursive guest scan lists imported files in `watchedFiles`. Schema's TypeScript surface includes
   imported declarations; names from another file are emitted without source mappings, because a
   mapping must stay inside the transformed document.
-- **LSP.** One graph serves every language. Cross-file definition reads a use in file A, finds the
-  imported alias with `uri` B, and converts the declaration span against B's open text or the graph
-  cache.
+- **LSP.** One graph serves every language. Definition reads a use in file A, finds the imported alias with `uri` B, and converts the declaration span against B's open text or the graph cache. References walk every analyzed node and match definitions by `(uri, span)`, so aliases in other files are included. Rename uses the same match to return edits for every affected URI.
 
 ## Two-file example
 
@@ -202,6 +200,5 @@ imports `base` and `limit` at runtime.
   re-exported until types are translated between stores.
 - Machine recognizes and analyzes imports but its checker does not merge imported events or
   states. Schema and calc are the resolved cross-file cases.
-- Cross-file references and rename are single-file. Only definition crosses documents.
 - A changed dependency invalidates dependents lazily. Open documents in the LSP refresh on their
   next edit, not immediately when another open file changes.

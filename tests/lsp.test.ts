@@ -184,6 +184,23 @@ test("the LSP resolves a definition across imported files", async () => {
     });
     assert.equal(definition.result.uri, blogUri);
     assert.equal(definition.result.range.start.line, 1);
+
+    const references = await client.request("textDocument/references", {
+      textDocument: { uri: blogUri },
+      position: { line: 1, character: 6 },
+      context: { includeDeclaration: true },
+    });
+    const uris = references.result.map((entry: Message) => entry.uri);
+    assert.ok(uris.includes(blogUri), `references did not include the declaration: ${JSON.stringify(uris)}`);
+    assert.ok(uris.includes(catalogUri), `references did not include the importing file: ${JSON.stringify(uris)}`);
+
+    const renamed = await client.request("textDocument/rename", {
+      textDocument: { uri: blogUri },
+      position: { line: 1, character: 6 },
+      newName: "Account",
+    });
+    assert.ok(renamed.result.changes[blogUri].length >= 1, "rename missed the declaration");
+    assert.ok(renamed.result.changes[catalogUri].length >= 1, "rename missed the imported use");
   } finally {
     client.close();
   }

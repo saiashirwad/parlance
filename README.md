@@ -69,7 +69,7 @@ There is no `03-incremental.md` yet.
 Working:
 
 - `.parl` compilation with static checks, root-item recovery, and a self-hosted grammar.
-- Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, single-file rename, cross-file definition).
+- Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, cross-file definition, references, and rename).
 - Cross-file imports through one `ModuleGraph`: schema and calc resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step.
@@ -81,7 +81,7 @@ Not built:
 
 - Incremental checking.
 - Formatting.
-- Workspace symbols, multi-file rename, and cross-file references.
+- Workspace symbols and formatting.
 - Source maps for runtime stack traces.
 - Publishing. The package is private and has no 1.0 milestone.
 
