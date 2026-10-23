@@ -27,6 +27,11 @@ const steps: readonly Step[] = [
   { name: "typecheck", command: ["pnpm", "typecheck"] },
   { name: "unit + property tests", command: ["pnpm", "test"] },
   {
+    name: "grammar and generated AST drift",
+    command: ["node", "tools/grammar-check.ts"],
+    expect: ["self-host: compiled grammar parses itself"],
+  },
+  {
     name: "check three example languages",
     command: [
       "./parlance",

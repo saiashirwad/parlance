@@ -20,6 +20,9 @@ pnpm typecheck
 # Explicit tsgo navigation: hover and definition from .ts into .calc and .schema.
 node --test tests/tsgo.test.ts
 
+# Mapping oracle: every verbatim mapping slices the same guest text; ranges stay in bounds.
+node --test tests/ts-mappings.test.ts
+
 # Inspect the mapped surface without a compiler.
 node -e '
 import("./examples/calc/calc.ts").then(async ({ calc }) => {

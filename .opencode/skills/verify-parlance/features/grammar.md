@@ -18,17 +18,20 @@ node src/grammar/cli.ts gen examples/calc/calc.parl /tmp/calc.ast.ts
 ## Driving it with the shell
 
 ```sh
-# 1. Generated types match what is checked in.
+# 1. Generated types match what is checked in, for every example.
+node tools/grammar-check.ts
+
+# 2. Generate one AST explicitly and diff it.
 node src/grammar/cli.ts gen examples/calc/calc.parl /tmp/calc.ast.ts
 diff -u examples/calc/calc.ast.ts /tmp/calc.ast.ts
 
-# 2. The grammar language parses itself and the AST matches the bootstrap.
+# 3. The grammar language parses itself and the AST matches the bootstrap.
 node --test tests/grammar.test.ts
 
-# 3. Generated types match parsed values.
+# 4. Generated types match parsed values.
 node --test tests/grammar-types.test.ts
 
-# 4. A grammar with a static error is rejected with a grammar span.
+# 5. A grammar with a static error is rejected with a grammar span.
 cat > /tmp/bad.parl <<'EOF'
 grammar Bad
 skip /\s+/
@@ -38,7 +41,7 @@ EOF
 node src/grammar/cli.ts gen /tmp/bad.parl /tmp/bad.ast.ts; echo "exit=$?"
 ```
 
-End state: step 1 diff is empty; steps 2 and 3 pass; step 4 exits nonzero and names `File` as left-recursive.
+End state: step 1 reports every grammar and AST current; step 2 diff is empty; steps 3 and 4 pass; step 5 exits nonzero and names `File` as left-recursive.
 
 ## Gotchas
 
