@@ -59,7 +59,7 @@ Expected runtime output:
 | command | stdout |
 | --- | --- |
 | calc | `250` then `250 125 true` |
-| schema | `sai@example.com 0 0` |
+| schema | `sai@example.com 1 1 0 1 1 1 0` |
 | machine | `Paid Checkout Paid pay 50` |
 
 `examples/typescript/*.ts` import guest files through the Node loader. If one fails, the thrown `SyntaxError` carries the guest line and column.

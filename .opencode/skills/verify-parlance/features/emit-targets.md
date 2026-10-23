@@ -36,7 +36,7 @@ node --import ./examples/register.ts examples/typescript/schema.ts
 ./parlance emit --target nope examples/schema/blog.schema; echo "exit=$?"
 ```
 
-End state: SQL contains `CREATE TABLE "User"` and the `userByEmail`/`draftCount`/`publishedPosts` queries; Drizzle contains `sqliteTable`; Kysely contains `interface DB`; the runtime prints `sai@example.com 0 0`; the unknown target exits 1 and lists `sql, drizzle, kysely`.
+End state: SQL contains `CREATE TABLE "User"`, the `userByEmail`/`draftCount`/`publishedPosts` queries, a parameterized `INSERT INTO "User"`, `UPDATE "Post"`, and `DELETE FROM "Post"`, plus the `DEFAULT` clauses; Drizzle contains `sqliteTable`; Kysely contains `interface DB`; the runtime prints `sai@example.com 1 1 0 1 1 1 0`; the unknown target exits 1 and lists `sql, drizzle, kysely`.
 
 ## Gotchas
 
