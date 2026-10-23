@@ -265,6 +265,34 @@ runtimeModule({
 
 The loader registers every guest extension, reads the file, analyzes it, and returns the emitted module. If a runtime module imports another guest file, the loader handles it recursively. If analysis produced any diagnostic, loading throws a `SyntaxError` with rendered guest positions.
 
+### Schema mutations and defaults
+
+The schema example writes as well as reads:
+
+```parl
+insert User { email: $email, role: Admin }
+update Post |> where id == $id |> set status = $status
+delete Post |> where id == $id
+```
+
+`$name` is a bound parameter. A bare name is a literal for an enum or Bool field (`Admin`, `true`), which keeps parameters and enum members distinguishable without guessing from field names. `update` keeps the query pipeline and adds two stages: `where` filters, `set` assigns a comma-separated field list. The mutation's generated name is `insert<Model>`, `update<Model>`, or `delete<Model>`, so one mutation of each kind is legal per model.
+
+The checker enforces that a model exists, every field exists, required fields appear exactly once, `@auto` primaries are omitted, and `@primary` fields are never updated. Bound parameters inherit the field type; reusing one name at two types is an error. Diagnostics point at the model name, field name, or value token that caused the error.
+
+The TypeScript surface exposes writes next to reads:
+
+```ts
+insertUser(params: { email: string; role: Role; createdAt?: string }): number;
+updatePost(params: { where: { id: number }; set: { status: PostStatus } }): number;
+deletePost(params: { id: number }): number;
+```
+
+`insert` returns `lastInsertRowid`; `update` and `delete` return the number of changed rows. `update` nests `where` and `set` because the same field name may legitimately occur in both positions. Parameters bind by name; values are never interpolated into SQL.
+
+`@default(...)` accepts a string or number literal, an enum member, a Bool literal, and `now` for `DateTime`. The DDL emits `DEFAULT`, the TypeScript insert type marks the field optional, and the SQL target omits the field from INSERT so SQLite applies the default. If a caller supplies an omitted defaulted or nullable field, the runtime composes a second named-parameter INSERT from schema metadata. Defaults are rejected on `@primary` and `@auto` fields, and a default whose kind does not match the field type is an error.
+
+The Drizzle target emits `.default(...)` (and `sql\`CURRENT_TIMESTAMP\`` for `now`); the Kysely target marks defaulted columns as `Generated<T>`. Both remain schema targets: mutation call sites are the runtime methods above, not emitted query builders. Typechecking generated Drizzle/Kysely output is a separate issue.
+
 ### Targets
 
 A target is a function from checked IR to an artifact:
