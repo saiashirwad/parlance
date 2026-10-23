@@ -1,0 +1,231 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import type { Binding, Dependency } from "./check/index.ts";
+import { type Diagnostic, error, route, withDocument } from "./diagnostic.ts";
+import {
+  type Analysis,
+  analyzeParsed,
+  type AnyLanguage,
+  type Import,
+} from "./language.ts";
+import type { IncrementalStats } from "./parser/incremental.ts";
+import type { ParseResult } from "./parser/parse.ts";
+
+export type ResolvedImport = {
+  readonly import: Import;
+  readonly uri: string | null;
+  readonly node: ModuleNode | null;
+};
+
+export type ModuleNode = {
+  readonly uri: string;
+  readonly language: AnyLanguage;
+  readonly source: string;
+  readonly analysis: Analysis;
+  readonly exports: ReadonlyMap<string, Binding>;
+  readonly imports: readonly ResolvedImport[];
+};
+
+export type ModuleGraphOptions = {
+  readonly languages: readonly AnyLanguage[];
+  /** Returns file text, or null when the document does not exist. Defaults to the filesystem. */
+  readonly read?: (uri: string) => string | null;
+  /** Returns the resolved document URI, or null. Defaults to URL resolution from the importer. */
+  readonly resolve?: (specifier: string, from: string) => string | null;
+};
+
+export type AnalyzeOptions = {
+  /** Unsaved editor content. Without it the graph reads the file. */
+  readonly source?: string;
+  /** An already parsed entry document, as the LSP produces after an incremental reparse. */
+  readonly parsed?: ParseResult<unknown>;
+  readonly incremental?: IncrementalStats | null;
+};
+
+const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/** File paths and absolute URLs both become absolute URLs, so every node has one identity. */
+export const documentUri = (value: string): string =>
+  scheme.test(value) ? new URL(value).href : pathToFileURL(resolve(value)).href;
+
+const documentPath = (uri: string): string => {
+  if (uri.startsWith("file:")) return fileURLToPath(uri);
+  const url = new URL(uri);
+  return url.pathname || url.hostname || url.href;
+};
+
+const shortName = (uri: string): string => {
+  const path = documentPath(uri);
+  return path.slice(path.lastIndexOf("/") + 1) || path;
+};
+
+const readDisk = (uri: string): string | null => {
+  if (!uri.startsWith("file:")) return null;
+  try {
+    return readFileSync(fileURLToPath(uri), "utf8");
+  } catch {
+    return null;
+  }
+};
+
+const resolveUrl = (specifier: string, from: string): string | null => {
+  try {
+    const url = new URL(specifier, from);
+    return url.href;
+  } catch {
+    return null;
+  }
+};
+
+const languageFor = (languages: readonly AnyLanguage[], uri: string): AnyLanguage | undefined => {
+  const path = documentPath(uri);
+  return languages.find((language) => language.extensions.some((extension) => path.endsWith(extension)));
+};
+
+/**
+ * One graph per project root. It owns import resolution, cycle detection, dependency order,
+ * and analysis caching. Dependencies are analyzed before dependents; their errors are routed
+ * to the import site of the dependent while keeping their origin.
+ */
+export class ModuleGraph {
+  readonly #languages: readonly AnyLanguage[];
+  readonly #read: (uri: string) => string | null;
+  readonly #resolve: (specifier: string, from: string) => string | null;
+  readonly #nodes = new Map<string, ModuleNode>();
+  readonly #order: string[] = [];
+  readonly #dependents = new Map<string, Set<string>>();
+
+  constructor(options: ModuleGraphOptions) {
+    this.#languages = options.languages;
+    this.#read = options.read ?? readDisk;
+    this.#resolve = options.resolve ?? resolveUrl;
+  }
+
+  /** Analyzes an entry and every reachable dependency. Returns the entry's routed view. */
+  analyze(uri: string, options: AnalyzeOptions = {}): Analysis {
+    const id = documentUri(uri);
+    const existing = this.#nodes.get(id);
+    const source = options.source ?? existing?.source ?? this.#read(id);
+    if (source === null) throw new Error(`Cannot read ${id}`);
+    if (existing && (existing.source !== source || options.parsed !== undefined)) this.#invalidate(id);
+    return this.#visit(id, source, [], options.incremental ?? null, options.parsed).analysis;
+  }
+
+  node(uri: string): ModuleNode | undefined {
+    return this.#nodes.get(documentUri(uri));
+  }
+
+  source(uri: string): string | undefined {
+    return this.#nodes.get(documentUri(uri))?.source;
+  }
+
+  /** Every analyzed document, dependencies before dependents. */
+  order(): readonly string[] {
+    return [...this.#order];
+  }
+
+  /** Every analyzed document. */
+  watched(): readonly string[] {
+    return [...this.#nodes.keys()].sort();
+  }
+
+  #visit(
+    uri: string,
+    source: string,
+    stack: readonly string[],
+    incremental: IncrementalStats | null,
+    parsed: ParseResult<unknown> | undefined,
+  ): ModuleNode {
+    const cached = this.#nodes.get(uri);
+    if (cached && cached.source === source && parsed === undefined) return cached;
+
+    const language = languageFor(this.#languages, uri);
+    if (!language) throw new Error(`No parlance language is registered for ${uri}`);
+
+    const tree = parsed ?? language.grammar.parse(source);
+    const imports = tree.value === null ? [] : language.imports?.(tree.value) ?? [];
+    const diagnostics: Diagnostic[] = [];
+    const dependencies: Dependency[] = [];
+    const edges: ResolvedImport[] = [];
+    const ancestors = [...stack, uri];
+    const seen = new Set<string>();
+
+    for (const entry of imports) {
+      const target = this.#resolve(entry.specifier, uri);
+      if (target === null) {
+        diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
+        edges.push({ import: entry, uri: null, node: null });
+        continue;
+      }
+      if (ancestors.includes(target)) {
+        const start = ancestors.indexOf(target);
+        const cycle = [...ancestors.slice(start), target].map(shortName).join(" -> ");
+        diagnostics.push(error(`Import cycle: ${cycle}`, entry.span));
+        edges.push({ import: entry, uri: target, node: null });
+        continue;
+      }
+      const targetSource = this.#read(target);
+      if (targetSource === null) {
+        diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
+        edges.push({ import: entry, uri: target, node: null });
+        continue;
+      }
+      const node = this.#visit(target, targetSource, ancestors, null, undefined);
+      let dependents = this.#dependents.get(target);
+      if (!dependents) {
+        dependents = new Set();
+        this.#dependents.set(target, dependents);
+      }
+      dependents.add(uri);
+      for (const diagnostic of node.analysis.diagnostics) {
+        if (diagnostic.severity === "info") continue;
+        diagnostics.push(route(withDocument(diagnostic, target), { uri, span: entry.span }));
+      }
+      if (!seen.has(target)) {
+        seen.add(target);
+        dependencies.push({
+          specifier: entry.specifier,
+          uri: target,
+          exports: node.exports as ReadonlyMap<string, Binding>,
+          module: node.analysis.ir,
+        });
+      }
+      edges.push({ import: entry, uri: target, node });
+    }
+
+    const analysis = analyzeParsed(
+      language,
+      source,
+      uri,
+      tree,
+      incremental,
+      { dependencies, diagnostics },
+    );
+    const exports = new Map<string, Binding>();
+    if (analysis.ir !== null && language.exports) {
+      for (const binding of language.exports(analysis.ir)) {
+        exports.set(binding.name, binding.uri === undefined ? { ...binding, uri } : binding);
+      }
+    }
+    const node: ModuleNode = { uri, language, source, analysis, exports, imports: edges };
+    this.#nodes.set(uri, node);
+    if (!this.#order.includes(uri)) this.#order.push(uri);
+    return node;
+  }
+
+  /** Drops a changed document and every document that transitively imports it. */
+  #invalidate(uri: string): void {
+    const queue = [uri];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (!this.#nodes.delete(current)) continue;
+      const index = this.#order.indexOf(current);
+      if (index >= 0) this.#order.splice(index, 1);
+      for (const dependent of this.#dependents.get(current) ?? []) queue.push(dependent);
+      this.#dependents.delete(current);
+    }
+  }
+}
+
+export { languageFor as languageForUri };

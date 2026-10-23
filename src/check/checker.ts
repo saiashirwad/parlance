@@ -19,6 +19,24 @@ export type Spanned = { readonly span: Span };
 
 export const at = (value: Span | Spanned): Span => "start" in value ? value : value.span;
 
+/** One analyzed dependency, as seen by a checker. */
+export type Dependency<Type = unknown> = {
+  /** The specifier exactly as written in the importing file. */
+  readonly specifier: string;
+  /** The resolved document URI. */
+  readonly uri: string;
+  /** Exported bindings, already carrying their defining `uri`. */
+  readonly exports: ReadonlyMap<string, Binding<Type>>;
+  /** The dependency's checked IR, for languages that need more than a binding. */
+  readonly module: unknown;
+};
+
+/** Read-only dependency view. A language resolves imported names without graph internals. */
+export type Dependencies<Type = unknown> = {
+  readonly all: readonly Dependency<Type>[];
+  readonly of: (specifier: string) => Dependency<Type> | undefined;
+};
+
 class AbortCheck extends Error {
   constructor() {
     super("check aborted");
@@ -38,14 +56,26 @@ export class Checker<T = unknown> {
   readonly uri: string;
   readonly source: string;
   readonly facts: Facts<T>;
+  readonly dependencies: Dependencies<T>;
   readonly #scopes: Map<string, Binding<T>>[] = [new Map()];
+  readonly #imported = new Map<string, Binding<T>>();
   #nextBinding = 1;
   #references = new Set<string>();
 
-  constructor(uri: string, source: string, tokens: readonly Token[] = [], diagnostics: readonly Diagnostic[] = []) {
+  constructor(
+    uri: string,
+    source: string,
+    tokens: readonly Token[] = [],
+    diagnostics: readonly Diagnostic[] = [],
+    dependencies: readonly Dependency<T>[] = [],
+  ) {
     this.uri = uri;
     this.source = source;
-    this.facts = emptyFacts<T>([...diagnostics], [...tokens]);
+    this.facts = emptyFacts<T>([...diagnostics], [...tokens], uri);
+    this.dependencies = {
+      all: dependencies,
+      of: (specifier) => dependencies.find((dependency) => dependency.specifier === specifier),
+    };
   }
 
   diagnostic(message: string, value: Span | Spanned, options: CheckOptions = {}): Diagnostic {
@@ -115,6 +145,28 @@ export class Checker<T = unknown> {
     }
     if (found && value !== undefined) this.reference(found, value);
     return found;
+  }
+
+  /**
+   * Binds an exported name from the first dependency that provides it. The returned binding keeps
+   * the defining document's `uri` and span but receives a local id so references stay unambiguous.
+   */
+  imported(name: string, value?: Span | Spanned): Binding<T> | undefined {
+    for (const dependency of this.dependencies.all) {
+      const binding = dependency.exports.get(name);
+      if (!binding) continue;
+      const key = `${binding.uri ?? dependency.uri}:${binding.id}`;
+      let local = this.#imported.get(key);
+      if (!local) {
+        local = { ...binding, id: this.#nextBinding++, uri: binding.uri ?? dependency.uri };
+        this.facts.definitions.push(local);
+        this.bind(local);
+        this.#imported.set(key, local);
+      }
+      if (value !== undefined) this.reference(local, value);
+      return local;
+    }
+    return undefined;
   }
 
   reference(binding: { readonly id: number; readonly uri?: string }, value: Span | Spanned): void {

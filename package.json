@@ -10,6 +10,7 @@
     "./diagnostic": "./src/diagnostic.ts",
     "./grammar": "./src/grammar/index.ts",
     "./check": "./src/check/index.ts",
+    "./modules": "./src/modules.ts",
     "./types": "./src/types/index.ts",
     "./ts": "./src/ts/index.ts",
     "./ts/host": "./src/ts/host.ts",

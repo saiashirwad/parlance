@@ -1,10 +1,27 @@
-import { type Binding, Checker, type Facts, semanticTokens, type Token } from "./check/index.ts";
+import { type Binding, Checker, type Dependency, type Facts, semanticTokens, type Token } from "./check/index.ts";
 import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
 import type { ParseResult } from "./parser/parse.ts";
 import type { LexToken, Trivia } from "./parser/spec.ts";
+import type { Span } from "./source.ts";
 import type { TsDoc } from "./ts/index.ts";
+
+/** One import declaration, resolved by the module graph. `span` covers the specifier text. */
+export type Import = { readonly specifier: string; readonly span: Span };
+
+/** A quoted guest string literal as an import. The span excludes the quotes. */
+export const importSpecifier = (literal: { readonly text: string; readonly span: Span }): Import => {
+  const quoted = literal.text.length >= 2 && literal.text.startsWith("\"") && literal.text.endsWith("\"");
+  if (!quoted) return { specifier: literal.text, span: literal.span };
+  let value = literal.text.slice(1, -1);
+  try {
+    value = JSON.parse(literal.text);
+  } catch {
+    // Keep the unescaped text; the graph will report a missing file.
+  }
+  return { specifier: value, span: { start: literal.span.start + 1, end: literal.span.end - 1 } };
+};
 
 export type Artifact = {
   readonly text: string;
@@ -17,6 +34,10 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly grammar: CompiledGrammar<Ast>;
   /** Elaborates a parsed file into checked IR. Errors go through `cx`. */
   readonly check: (file: Ast, cx: Checker<Type>) => Ir;
+  /** Declares the file's imports. The module graph parses, resolves, and analyzes them. */
+  readonly imports?: (file: Ast) => readonly Import[];
+  /** The bindings this module exposes to importers. */
+  readonly exports?: (module: Ir) => readonly Binding<Type>[];
   /** TypeScript surface, with source mappings where identifiers correspond to guest text. */
   readonly typescript?: (module: Ir) => TsDoc;
   /** ES module source for the Node loader. */
@@ -57,12 +78,22 @@ export type Analysis<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly incremental: IncrementalStats | null;
 };
 
+/** Extra analysis input supplied by the module graph. */
+export type AnalysisContext<Type = unknown> = {
+  /** Resolved direct dependencies, in import order. */
+  readonly dependencies?: readonly Dependency<Type>[];
+  /** Diagnostics produced before checking, such as unresolved imports or cycles. */
+  readonly diagnostics?: readonly Diagnostic[];
+};
+
 /** Parse, check, and collect every fact the editor and hosts need. Never throws on guest input. */
 export const analyze = <Ast, Ir, Type>(
   language: Language<Ast, Ir, Type>,
   source: string,
   uri = "memory://input",
-): Analysis<Ast, Ir, Type> => analyzeParsed(language, source, uri, language.grammar.parse(source));
+  context: AnalysisContext<Type> = {},
+): Analysis<Ast, Ir, Type> =>
+  analyzeParsed(language, source, uri, language.grammar.parse(source), null, context);
 
 /** Analyze an already parsed file. The LSP uses this after an incremental reparse. */
 export const analyzeParsed = <Ast, Ir, Type>(
@@ -71,9 +102,16 @@ export const analyzeParsed = <Ast, Ir, Type>(
   uri: string,
   parsed: ParseResult<Ast>,
   incremental: IncrementalStats | null = null,
+  context: AnalysisContext<Type> = {},
 ): Analysis<Ast, Ir, Type> => {
   const lexical = language.grammar.highlightTokens(parsed.tokens, parsed.trivia);
-  const checker = new Checker<Type>(uri, source, lexical, parsed.diagnostics);
+  const checker = new Checker<Type>(
+    uri,
+    source,
+    lexical,
+    [...parsed.diagnostics, ...(context.diagnostics ?? [])],
+    context.dependencies ?? [],
+  );
   let ir: Ir | null = null;
   if (parsed.value !== null && (parsed.ok || language.checkPartial !== false)) {
     try {

@@ -71,6 +71,7 @@ export type Reference = { readonly id: number; readonly span: Span };
 export type Typed<T = unknown> = { readonly span: Span; readonly type: T };
 
 export type Facts<T = unknown> = {
+  readonly uri?: string;
   readonly diagnostics: Diagnostic[];
   readonly definitions: Definition<T>[];
   readonly references: Reference[];
@@ -78,7 +79,12 @@ export type Facts<T = unknown> = {
   readonly tokens: Token[];
 };
 
-export const facts = <T = unknown>(diagnostics: Diagnostic[] = [], tokens: Token[] = []): Facts<T> => ({
+export const facts = <T = unknown>(
+  diagnostics: Diagnostic[] = [],
+  tokens: Token[] = [],
+  uri?: string,
+): Facts<T> => ({
+  ...(uri === undefined ? {} : { uri }),
   diagnostics,
   definitions: [],
   references: [],
@@ -101,10 +107,13 @@ export const typeAt = <T>(value: Facts<T>, offset: number): Typed<T> | undefined
 export const referenceAt = (value: Facts, offset: number): Reference | undefined =>
   value.references.find((reference) => contains(reference.span, offset));
 
+const local = <T>(value: Facts<T>): Definition<T>[] =>
+  value.definitions.filter((definition) => definition.uri === undefined || definition.uri === value.uri);
+
 export const definitionAt = <T>(value: Facts<T>, offset: number): Definition<T> | undefined => {
   const reference = referenceAt(value, offset);
   if (reference) return value.definitions.find((definition) => definition.id === reference.id);
-  return value.definitions.find((definition) => contains(definition.span, offset));
+  return local(value).find((definition) => contains(definition.span, offset));
 };
 
 /** Refines lexical tokens with declared/referenced kinds without overlapping ranges. */
@@ -112,7 +121,7 @@ export const semanticTokens = <T>(value: Facts<T>): readonly Token[] => {
   const byId = new Map(value.definitions.map((definition) => [definition.id, definition]));
   const exact = new Map<string, TokenKind>();
   const key = (at: Span) => `${at.start}:${at.end}`;
-  for (const definition of value.definitions) exact.set(key(definition.span), definition.kind);
+  for (const definition of local(value)) exact.set(key(definition.span), definition.kind);
   for (const reference of value.references) {
     const definition = byId.get(reference.id);
     if (definition) exact.set(key(reference.span), definition.kind);

@@ -15,4 +15,11 @@ export {
   type Typed,
   typeAt,
 } from "./facts.ts";
-export { at, type CheckOptions, Checker, type Spanned } from "./checker.ts";
+export {
+  at,
+  type CheckOptions,
+  Checker,
+  type Dependency,
+  type Dependencies,
+  type Spanned,
+} from "./checker.ts";
