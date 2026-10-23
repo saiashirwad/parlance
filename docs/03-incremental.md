@@ -61,20 +61,20 @@ After, for the benchmark edit (a same-length replacement in the middle):
 | select and parse the window | 1.7 |
 | shift spans | 0.1 |
 | splice and diagnostics | 2.9 |
-| full parse, for comparison | 219 to 249 |
+| full parse, for comparison | 219 to 285 |
 
-Three `pnpm bench` runs gave `edit ms` of 73.4, 74.5, and 77.0 against `parse ms` of 219.1, 229.6, and 248.8. That is 31% to 35% of a full parse.
+Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse.
 
 The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
 
-| edit | ms | share of a full parse |
-| --- | --- | --- |
-| same-length, offset 4 | 13.7 | 6% |
-| same-length, middle | 79.7 | 33% |
-| same-length, last line | 130 | 55% |
-| one character inserted, middle | 154 | 65% |
+| edit | ms |
+| --- | --- |
+| same-length, offset 4 | 13.7 |
+| same-length, middle | 79.7 |
+| same-length, last line | 130 |
+| one character inserted, middle | 154 |
 
-An insertion pays two extra costs. The reused tail tokens and trivia need shifted copies, and every AST span after the edit is cloned. On the same file the AST clone alone measured 63 ms. The remaining bottleneck for suffix edits is the prefix lex. It is linear in the distance from the start of the file to the edit. Removing it needs either a lexer with resumable state or a proof that a grammar's token regexes cannot reach across a boundary. `mutate: true` avoids the AST clone for the LSP.
+A full parse of the same file measured 219 to 285 ms across runs. An insertion pays two extra costs. The reused tail tokens and trivia need shifted copies, and every AST span after the edit is cloned. On the same file the AST clone alone measured 63 ms. The remaining bottleneck for suffix edits is the prefix lex. It is linear in the distance from the start of the file to the edit. Removing it needs either a lexer with resumable state or a proof that a grammar's token regexes cannot reach across a boundary. `mutate: true` avoids the AST clone for the LSP.
 
 ## Verification
 
