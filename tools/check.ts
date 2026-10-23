@@ -52,6 +52,11 @@ const steps: readonly Step[] = [
     expect: ["ok examples/schema/catalog.schema", "ok examples/calc/imports.calc"],
   },
   {
+    name: "check the grammar language",
+    command: ["./parlance", "check", "src/grammar/grammar.parl"],
+    expect: ["ok src/grammar/grammar.parl"],
+  },
+  {
     name: "run calc through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/calc.ts"],
     expect: ["250\n250 125 true"],

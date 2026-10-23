@@ -107,6 +107,27 @@ local ok, failure = pcall(function()
   local machineNames = {}
   for _, symbol in ipairs(machineSymbols or {}) do machineNames[symbol.name] = true end
   assert(machineNames.pay and machineNames.Checkout, "machine symbols are missing pay or Checkout")
+
+  open("src/grammar/grammar.parl")
+  assert(vim.bo.filetype == "parl", "expected filetype parl")
+  local grammarSource = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local grammarSymbols = request("textDocument/documentSymbol", { textDocument = { uri = vim.uri_from_bufnr(0) } })
+  local grammarNames = {}
+  for _, symbol in ipairs(grammarSymbols or {}) do grammarNames[symbol.name] = true end
+  assert(grammarNames.Grammar and grammarNames.Rule and grammarNames.Primary, "grammar symbols are missing")
+  local grammarTokens = request("textDocument/semanticTokens/full", { textDocument = { uri = vim.uri_from_bufnr(0) } })
+  assert(grammarTokens and grammarTokens.data and #grammarTokens.data > 0, "grammar semantic tokens are empty")
+  local rootLine = nil
+  for index, text in ipairs(grammarSource) do
+    if text:match("^root File") then rootLine = index - 1 end
+  end
+  assert(rootLine, "missing root File line")
+  local rootCharacter = grammarSource[rootLine + 1]:find("File") - 1
+  local grammarHover = request("textDocument/hover", {
+    textDocument = { uri = vim.uri_from_bufnr(0) },
+    position = position(rootLine, rootCharacter),
+  })
+  assert(grammarHover.contents.value:find("rule File") ~= nil, "grammar hover did not resolve the rule")
 end)
 
 if not ok then
@@ -114,5 +135,5 @@ if not ok then
   vim.cmd("cquit 1")
 end
 
-print("ok nvim: calc, schema, machine, hover, definition, tokens, diagnostics")
+print("ok nvim: calc, schema, machine, parl, hover, definition, tokens, diagnostics")
 vim.cmd("qa!")

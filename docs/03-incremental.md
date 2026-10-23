@@ -94,7 +94,7 @@ A full parse of the same file measured 219 to 285 ms across runs. An insertion p
 node --test tests/incremental.test.ts   # 2,400 randomized edits plus targeted cases
 pnpm test
 pnpm typecheck
-node tools/check.ts --bench             # 13 steps, including the LSP edit scenario
+node tools/check.ts --bench             # 14 steps, including the LSP edit scenario
 pnpm bench
 ```
 

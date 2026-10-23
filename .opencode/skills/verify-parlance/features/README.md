@@ -9,6 +9,7 @@ One file per user-facing capability. The map is the source of truth for what "wo
 | TypeScript content mapper | tsgo, `.ts` importing `.calc`/`.schema`/`.machine` | [content-mapper.md](content-mapper.md) |
 | Cross-file imports | `ModuleGraph`, `import`/`use`, CLI/loader/mapper/LSP | [modules.md](modules.md) |
 | Neovim LSP | `.nvim.lua`, `exrc`, semantic tokens, headless checks | [neovim.md](neovim.md) |
+| Parser comparison | same grammar/corpus vs old langkit | [performance.md](performance.md) |
 | Node runtime | `registerLanguages`, guest imports | [node-runtime.md](node-runtime.md) |
 | Language server | `parlance lsp`, stdio JSON-RPC | [lsp.md](lsp.md) |
 | Emit targets | `parlance emit --target sql\|drizzle\|kysely` | [emit-targets.md](emit-targets.md) |

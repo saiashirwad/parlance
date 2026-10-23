@@ -26,7 +26,7 @@ The check prints one `ok` line per file. The Node command prints `250` from the 
 
 ## Neovim
 
-The repository-local `.nvim.lua` registers one `parlance` client for `.calc`, `.schema`, and `.machine` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
+The repository-local `.nvim.lua` registers one `parlance` client for `.calc`, `.schema`, `.machine`, and `.parl` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
 
 See [`docs/06-neovim.md`](docs/06-neovim.md) for keymaps, a global config for other parlance projects, and troubleshooting.
 
@@ -69,6 +69,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/04-authoring.md`](docs/04-authoring.md): a step-by-step guide to adding a language.
 - [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
 - [`docs/06-neovim.md`](docs/06-neovim.md): project-local LSP wiring, keymaps, verification, and troubleshooting.
+- [`docs/07-comparison.md`](docs/07-comparison.md): common-grammar parser throughput against the old langkit checkout.
 
 ## Status
 

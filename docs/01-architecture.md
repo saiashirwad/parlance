@@ -367,6 +367,7 @@ src/
     parse.ts       bootstrap parser for .parl
     compile.ts     lexer/parser compiler, static checks
     types.ts       AST type generation
+    language.ts    .parl as a Language: LSP diagnostics, symbols, navigation, tokens
     grammar.parl   the grammar language in itself
   parser/
     lex.ts         token array, trivia

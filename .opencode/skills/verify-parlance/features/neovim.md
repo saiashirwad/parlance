@@ -2,7 +2,7 @@
 
 ## Sub-features
 
-- Project-local `.nvim.lua` registers one `parlance` LSP for `.calc`, `.schema`, and `.machine`.
+- Project-local `.nvim.lua` registers one `parlance` LSP for `.calc`, `.schema`, `.machine`, and `.parl`.
 - `root_dir` scopes the server to this checkout; `.schema` is not hijacked elsewhere.
 - Semantic tokens are enabled on attach (Neovim 0.12 `enable`, 0.11 `start`).
 - Real `exrc` startup path, including trust, is exercised by `pnpm nvim:check`.
@@ -24,10 +24,10 @@ pnpm nvim:check
 Both print:
 
 ```
-ok nvim: calc, schema, machine, hover, definition, tokens, diagnostics
+ok nvim: calc, schema, machine, parl, hover, definition, tokens, diagnostics
 ```
 
-They assert a client on each filetype, hover `number`, definition line 1, non-empty semantic tokens with a keyword at 0,0, an `Expected number` diagnostic that clears after the fix, schema/machine symbols, and `catalog.schema` definition into `blog.schema`.
+They assert a client on each filetype (including `.parl`), hover `number`, definition line 1, non-empty semantic tokens with a keyword at 0,0, an `Expected number` diagnostic that clears after the fix, schema/machine/grammar symbols, and `catalog.schema` definition into `blog.schema`.
 
 ## Gotchas
 

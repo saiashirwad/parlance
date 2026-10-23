@@ -284,6 +284,42 @@ test("closing an unsaved dependency refreshes importers from disk", async () => 
   }
 });
 
+test("the generic LSP serves .parl grammar files", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../src/grammar/grammar.parl", import.meta.url), "utf8");
+  const grammarUri = pathToFileURL("/virtual/grammar.parl").href;
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const published = await client.open(grammarUri, source);
+    assert.deepEqual(published.params.diagnostics, []);
+
+    const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri: grammarUri } });
+    const names = symbols.result.map((symbol: Message) => symbol.name);
+    for (const name of ["Grammar", "File", "Rule", "Primary"]) assert.ok(names.includes(name), `missing symbol ${name}`);
+
+    const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: grammarUri } });
+    assert.ok(tokens.result.data.length > 0);
+
+    const lines = source.split("\n");
+    const line = lines.findIndex((entry) => entry.startsWith("root File"));
+    const character = lines[line]!.indexOf("File");
+    const hover = await client.request("textDocument/hover", {
+      textDocument: { uri: grammarUri },
+      position: { line, character },
+    });
+    assert.match(hover.result.contents.value, /rule File/);
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri: grammarUri },
+      position: { line, character },
+    });
+    assert.equal(definition.result.range.start.line, lines.findIndex((entry) => entry.startsWith("rule File =")));
+  } finally {
+    client.close();
+  }
+});
+
 test("the generic LSP serves a state-machine language without new server code", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../examples/machine/order.machine", import.meta.url), "utf8");

@@ -1,7 +1,7 @@
 # Neovim
 
 Parlance ships one generic LSP. A project-local `.nvim.lua` registers it for
-`.calc`, `.schema`, and `.machine` files and enables semantic tokens. This is
+`.calc`, `.schema`, `.machine`, and `.parl` files and enables semantic tokens. This is
 the same project-local `exrc` pattern used by the older `langkit` checkout.
 
 ## Quick start
@@ -12,6 +12,8 @@ Requirements: Neovim 0.11 or newer (0.12.5 was used for the smoke test), Node
 ```sh
 cd /Users/texoport/code/langkit-first-principles
 nvim examples/calc/demo.calc
+# or the grammar language itself:
+nvim src/grammar/grammar.parl
 ```
 
 Your config needs project-local configs enabled:
@@ -44,6 +46,7 @@ repository.
 | Completion | insert mode; grammar keywords and top-level definitions |
 | Folding | `textDocument/foldingRange` |
 | Semantic tokens | enabled on attach; keywords, strings, numbers, types, properties |
+| Grammar files | `.parl` diagnostics, symbols, hover, definition, references, tokens |
 | Formatting | not provided by the server |
 
 Cross-file navigation currently covers definition, references, and rename.
@@ -71,7 +74,7 @@ enabled.
 vim.lsp.config("parlance", {
   cmd = { "node", root .. "/src/lsp/cli.ts", "--config", root .. "/parlance.config.ts" },
   cmd_cwd = root,
-  filetypes = { "calc", "schema", "machine" },
+  filetypes = { "calc", "schema", "machine", "parl" },
   workspace_required = true,
   root_dir = function(bufnr, on_dir)
     if vim.startswith(vim.api.nvim_buf_get_name(bufnr), root .. "/") then
@@ -98,7 +101,7 @@ Add a global `after/lsp/parlance.lua` (or a file sourced by your config). Set
 `parlance.config.ts`:
 
 ```lua
-vim.filetype.add({ extension = { calc = "calc", schema = "schema", machine = "machine" } })
+vim.filetype.add({ extension = { calc = "calc", schema = "schema", machine = "machine", parl = "parl" } })
 
 vim.lsp.config("parlance", {
   cmd = function(dispatchers, config)
@@ -108,7 +111,7 @@ vim.lsp.config("parlance", {
       "--config", root .. "/parlance.config.ts",
     }, dispatchers)
   end,
-  filetypes = { "calc", "schema", "machine" },
+  filetypes = { "calc", "schema", "machine", "parl" },
   root_markers = { "parlance.config.ts" },
 })
 
@@ -144,18 +147,18 @@ Neovim through `exrc`, and runs the same assertions.
 
 Both assert:
 
-- `.calc`, `.schema`, and `.machine` attach to `parlance`.
+- `.calc`, `.schema`, `.machine`, and `.parl` attach to `parlance`.
 - Hover returns `number`; definition lands on line 1.
 - Semantic tokens are non-empty and the first token is a keyword.
 - Breaking the calc buffer publishes an `Expected number` diagnostic; fixing it
   clears the diagnostic.
-- Schema and machine symbols appear.
-- Definition from `catalog.schema` reaches `User` in `blog.schema`.
+- Schema, machine, and grammar symbols appear.
+- Definition from `catalog.schema` reaches `User` in `blog.schema`; `.parl` root rules resolve.
 
 Passing output:
 
 ```
-ok nvim: calc, schema, machine, hover, definition, tokens, diagnostics
+ok nvim: calc, schema, machine, parl, hover, definition, tokens, diagnostics
 ```
 
 ## Troubleshooting

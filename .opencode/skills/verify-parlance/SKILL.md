@@ -105,6 +105,7 @@ Never commit `evidence/`; it is ignored. Never delete it during cleanup.
 | `tools/grammar-check.ts` | `node tools/grammar-check.ts` | every grammar compiles, every generated AST is current, self-host matches |
 | `tools/nvim-exrc-check.sh` | `pnpm nvim:check` | real Neovim `exrc` startup, LSP attach, hover, definition, tokens, diagnostics |
 | `tools/nvim-smoke.lua` | `pnpm nvim:smoke` | explicit `.nvim.lua` path with the same assertions |
+| `tools/compare-langkit.mjs` | `pnpm compare:langkit` | same-grammar parser throughput vs `~/code/langkit` |
 | `tools/lsp-smoke.ts` | `node tools/lsp-smoke.ts` | live LSP edit, diagnostics, hover, definition, tokens |
 | `tools/bench.ts` | `pnpm bench` | lex/parse/edit medians and reuse counts |
 | `src/grammar/cli.ts` | `node src/grammar/cli.ts gen <grammar.parl> <out.ts>` | typed AST generation |
