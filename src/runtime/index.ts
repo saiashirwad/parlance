@@ -32,17 +32,21 @@ export const runtimeModule = (options: RuntimeModuleOptions): string => {
 };
 
 const serialize = (value: unknown): string => {
-  const seen = new WeakSet<object>();
+  const ancestors = new Set<object>();
+  const assertAcyclic = (entry: unknown): void => {
+    if (entry === null || typeof entry !== "object") return;
+    if (ancestors.has(entry)) throw new Error("Runtime data contains a cycle");
+    ancestors.add(entry);
+    for (const child of Object.values(entry as Record<string, unknown>)) assertAcyclic(child);
+    ancestors.delete(entry);
+  };
+  assertAcyclic(value);
   const text = JSON.stringify(value, (key, entry: unknown) => {
     if (typeof entry === "undefined") {
       throw new Error(`Runtime data at ${JSON.stringify(key)} is undefined; use null for absence`);
     }
     if (typeof entry === "function" || typeof entry === "symbol" || typeof entry === "bigint") {
       throw new Error(`Runtime data at ${JSON.stringify(key)} is not serializable`);
-    }
-    if (entry !== null && typeof entry === "object") {
-      if (seen.has(entry)) throw new Error("Runtime data contains a cycle");
-      seen.add(entry);
     }
     return entry;
   });
