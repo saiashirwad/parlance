@@ -1,0 +1,3 @@
+let subtotal = 85 + 40;
+let freeShipping = subtotal == 125;
+show subtotal * 2;

@@ -55,28 +55,34 @@ A grammar is a `.parl` file compiled by the library. It is lossless and token-ba
 ```parl
 grammar Calc
 
-skip /\s+/ | /\/\/[^\n]*/
+skip /\s+/
+skip /\/\/[^\n]*/
 
 word /[A-Za-z_][A-Za-z0-9_]*/
-token Number /\d+/
+token Number /\d+(?:\.\d+)?/
 
 root File
 
-File = declarations:Decl* @file
+rule File = {
+  @file declarations:Decl*
+};
 
-Decl =
-  | @let "let" name:Name "=" value:Expr
-  | @show "show" value:Expr
+rule Decl = {
+  | @let "let" ~ name:Name "=" value:Expr ";"
+  | @show "show" value:Expr ";"
+};
 
-Expr = precedence {
+rule Expr = precedence {
   left "+" | "-"
   left "*" | "/"
   prefix "-"
   atom
-    | @number value:Text
+    | @number value:$Number
     | @name value:Name
     | "(" value:Expr ")"
-}
+};
+
+rule Name = { word };
 ```
 
 The compiler produces:
@@ -134,29 +140,31 @@ Before a grammar is usable, the compiler reports:
 - alternatives that cannot be distinguished by their first token set
 - unknown rule/token references
 
+Ordered choice is legal, including alternatives with overlapping first sets; the compiler warns only when an earlier alternative is nullable, which would make later ones unreachable. Keywords are contextual: the lexer emits words, and a literal matches by text, so `state` can be a field name in one place and a keyword in another. Tags are scoped to the rule that declares them, so two rules can both use `@token` with different fields.
+
 A grammar that fails these checks never produces a parser. They are diagnostics with grammar spans, not exceptions.
 
 ### Recovery
 
-The parser recovers automatically inside repetitions:
+The parser recovers automatically at the root item repetition:
 
 1. Parse an item. If it fails, report the expected set at the farthest token.
-2. Skip tokens until a token in the item's first set or the repetition's follow set.
-3. Continue the loop.
+2. Skip from the item start until a token in the item's sync set (first sets of its alternatives), tracking delimiter depth so a token inside `{...}` cannot end the item.
+3. Force progress, then continue. The malformed item is absent from the tree; the next declaration is not.
 
-This keeps `Decl*` producing a partial file after a malformed declaration, and it is what makes editor facts survive typing. A language can override the sync set with `@sync(Token, ...)` on a repetition.
+Only the root's declaration repetition recovers. Nested failures propagate to it, so one malformed declaration yields one diagnostic instead of a cascade. A cut inside the item does not suppress statement recovery: the item is abandoned, not the file. This is what keeps editor facts alive while typing.
 
 ### Incremental parsing
 
-When the root rule is a repetition (`File = items:Decl*`), the compiler exposes item spans. `reparse(previous, edit)`:
+When the root rule is a repetition of one item rule (`@file items:Decl*`), the compiler exposes item spans and enables incremental mode. `reparse(previous, previousSource, source, edit)`:
 
-1. Relex the new text (lexing is linear and cheap; incremental lexing is a later optimization).
-2. Find the old items intersecting the edit.
-3. Reuse untouched items before the edit. Shift untouched items after the edit by the edit delta.
-4. Parse only the token range covering the change, using the item rule.
-5. Splice and return `{ tree, stats }`.
+1. Relex the new text in full. Lexing is linear; incremental lexing is a later optimization.
+2. Select the items intersecting the edit plus one untouched item on each side. The margin absorbs token merges at boundaries and bounded lookahead.
+3. Reuse items before the window. Deep-clone and shift items after the window by the edit delta; never mutate the previous tree.
+4. Parse only the new token range covering the window, using the same item loop and recovery as a full parse.
+5. Splice, then verify structural invariants. If invariants fail, or a reused item's text no longer matches, fall back to a full parse and say so in the stats.
 
-Reuse is sound because top-level items are independent: no indentation-sensitive state, no parser state crosses an item boundary. The compiler rejects incremental mode for grammars that do not satisfy this shape. `tests/incremental.test.ts` asserts tree equality against a full parse after random edits, and `tools/bench.ts` reports the reuse ratio and timing.
+Soundness rests on four conditions the compiler enforces: the root has one item repetition, the item is productive, no parser state crosses an item boundary, and recovery is item-local. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead, and the tests include predicates at boundaries. Full-parse equality is the oracle for every randomized edit. `docs/03-incremental.md` records the algorithm, limits, and measurements.
 
 ## Stage 2: checking
 
@@ -220,17 +228,17 @@ A language can use it, ignore it, or bring its own. Schema and machine do not us
 `typescript(module)` returns a `TsDoc`, built with a mapped template:
 
 ```ts
-import { ts, id } from "parlance/ts";
+import { source, synth, ts } from "parlance/ts";
 
 const calcTypes = (module: CalcModule) => ts`
   ${module.declarations.map((decl) => ts`
-    export declare const ${id(decl.name)}: ${show(decl.type)};
+    export declare const ${source(decl.name)}: ${show(decl.type)};
   `)}
   export default ${show(module.result)};
 `;
 ```
 
-`id(node)` emits `node.text` and maps the virtual range back to `node.span`. Plain interpolations are text with no mapping. Nested templates and arrays flatten. The builder tracks virtual offsets, so there is no manual arithmetic and no `verbatim` length assertion.
+`source(node)` emits the guest text with a **verbatim** mapping (kind 0, all features). `synth(text, span)` emits synthesized text with an **atom** mapping (kind 1, hover/definition/references only). A plain interpolation is unmapped text. Nested templates and arrays flatten. The builder tracks virtual offsets, so the author supplies spans but never sums lengths. Mapping edge cases that need language care: escaped or renamed identifiers should use `synth`; generated type text has no guest origin, so a compiler error inside it cannot navigate back; imports should be emitted with real specifiers so the content mapper sees dependency edges.
 
 A `TsDoc` is `{ text, mappings }`, exactly what the content mapper needs.
 
@@ -280,7 +288,7 @@ One package, `@parlance/ts-host`, for every project:
 }
 ```
 
-`openProject` resolves `options.config` relative to `configFileName`, imports it, and keeps a registry per `projectHandle`. `transform` runs `analyze` + `typescript`, maps diagnostics to guest offsets, and returns `{ text, extension: ".ts", mappings, diagnostics }`. `openProject` watches guest files so unsaved edits invalidate the transform.
+`openProject` resolves `options.config` relative to `configFileName`, imports it, and keeps a registry per `projectHandle`. `transform` receives the current file content (including unsaved editor content), runs `analyze` + `typescript`, maps diagnostics to guest offsets, and returns `{ text, extension: ".ts", mappings, diagnostics }`. `openProject` returns an identity over the config and guest files on disk; TypeScript uses it to reopen the project when a dependency changes. The transform itself never reads the changed file from disk; it uses the content in the request.
 
 ### Node loader
 
@@ -293,14 +301,14 @@ One package, `@parlance/ts-host`, for every project:
 - incremental text sync
 - semantic tokens (lexer tokens refined by facts)
 - diagnostics, including related locations
-- hover (`showType` or a language `describe`)
+- hover (`describe(binding)` or `show(type)`)
 - definition and references (from facts)
 - document symbols (from definitions)
-- folding ranges (matching bracket tokens and top-level item spans)
-- completion (keywords + visible definitions)
-- rename (single file; workspace edits for known dependencies later)
+- folding ranges (matching bracket tokens)
+- completion (grammar keywords + top-level definitions; local-scope completion awaits recorded scope ranges)
+- rename (single file)
 
-Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server.
+Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file definitions.
 
 ## Package layout
 

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
 import { render, site } from "../diagnostic.ts";
-import { analyze, extensionMap, type Language } from "../language.ts";
+import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
 
 const describe = (diagnostic: Parameters<typeof render>[0], url: string, source: string): string => {
   const location = site(diagnostic, url);
@@ -11,7 +11,7 @@ const describe = (diagnostic: Parameters<typeof render>[0], url: string, source:
 };
 
 /** Installs Node module hooks for every guest extension. Guest imports resolve recursively. */
-export const registerLanguages = <Ast, Ir, Type>(languages: readonly Language<Ast, Ir, Type>[]): void => {
+export const registerLanguages = (languages: readonly AnyLanguage[]): void => {
   const registry = extensionMap(languages);
   registerHooks({
     load(url, context, nextLoad) {

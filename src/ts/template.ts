@@ -64,6 +64,14 @@ export const atom = (text: string, span: Span, features?: number): Mapped =>
 
 export const verbatim = (text: string, span: Span): Mapped => mapped(text, span, { mode: "verbatim" });
 
+/** Emits a node's own text with a verbatim mapping. The common case for identifiers and literals. */
+export const source = (value: { readonly text: string; readonly span: Span } | string, span?: Span): Mapped =>
+  typeof value === "string" ? verbatim(value, span!) : verbatim(value.text, value.span);
+
+/** Emits synthesized text mapped to a source span. Hover, definition, and references are kept. */
+export const synth = (text: string, span: Span, features: number = feature.atom): Mapped =>
+  atom(text, span, features);
+
 const create = (): Buffer => ({ parts: [], length: 0, mappings: [] });
 
 const build = (buffer: Buffer): TsDoc => ({ text: buffer.parts.join(""), mappings: buffer.mappings });

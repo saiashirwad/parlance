@@ -2,11 +2,10 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { discoverConfig, loadLanguages } from "../config.ts";
 import { type Diagnostic, site } from "../diagnostic.ts";
-import { analyze, extensionMap, type Language } from "../language.ts";
+import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
 import { type Mapping } from "./template.ts";
-
-type AnyLanguage = Language<unknown, unknown, unknown>;
 
 type HostConfig = {
   readonly languages: readonly AnyLanguage[];
@@ -47,30 +46,6 @@ const failed = (message: string): TransformResult => ({
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
-
-const discoverConfig = (directory: string): string | null => {
-  for (const name of ["parlance.config.ts", "parlance.config.mts", "parlance.config.js", "parlance.config.mjs"]) {
-    const path = join(directory, name);
-    try {
-      readFileSync(path);
-      return path;
-    } catch {
-      continue;
-    }
-  }
-  return null;
-};
-
-const loadConfig = async (path: string | null): Promise<HostConfig> => {
-  if (!path) return { languages: [] };
-  const url = pathToFileURL(path);
-  url.searchParams.set("mtime", String(Date.now()));
-  const module = await import(url.href) as { default?: unknown; languages?: unknown };
-  const value = module.default ?? module;
-  if (Array.isArray(value)) return { languages: value as AnyLanguage[] };
-  if (isRecord(value) && Array.isArray(value.languages)) return { languages: value.languages as AnyLanguage[] };
-  throw new Error(`${path} must export a language list, or { languages }`);
-};
 
 const guestFiles = (directory: string, extensions: ReadonlySet<string>): string[] =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -113,16 +88,16 @@ const buildProject = async (
     ? resolve(base, options.languages)
     : discoverConfig(base);
   try {
-    const config = await loadConfig(configured);
+    const languages = configured ? await loadLanguages(configured) : [];
     const extensions = new Set<string>();
-    for (const language of config.languages) for (const extension of language.extensions) extensions.add(extension);
+    for (const language of languages) for (const extension of language.extensions) extensions.add(extension);
     const watched = configured
       ? guestFiles(base, extensions).sort()
       : [];
     return {
       key,
       configPath: configured,
-      languages: config.languages,
+      languages,
       extensions,
       watchedFiles: watched,
       configIdentity: identity(configured, watched),

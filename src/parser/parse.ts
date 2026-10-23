@@ -3,6 +3,8 @@ import { type Span } from "../source.ts";
 import { lex } from "./lex.ts";
 import type { GrammarSpec, Key, LexToken, PExpr, PrecLevel, TokenList, Trivia } from "./spec.ts";
 
+export type { Edit } from "../source.ts";
+
 export type ParseOptions = { readonly maxDepth?: number };
 
 export type ParseResult<A = unknown> = {
@@ -443,6 +445,69 @@ class Machine {
     return undefined;
   }
 }
+
+export type ItemRange = {
+  readonly values: readonly unknown[];
+  readonly diagnostics: readonly Diagnostic[];
+  /** Token index the range parse stopped at. */
+  readonly next: number;
+};
+
+/**
+ * Parse the incremental item rule repeatedly over `[startToken, stopToken)`.
+ * This mirrors the root repetition's recovery loop without exposing `Machine`.
+ */
+export const parseItemRange = (
+  spec: GrammarSpec,
+  tokens: readonly LexToken[],
+  startToken: number,
+  stopToken: number,
+  options: ParseOptions = {},
+): ItemRange => {
+  const incremental = spec.incremental;
+  if (!incremental || tokens.length === 0) return { values: [], diagnostics: [], next: startToken };
+  const root = spec.rules[spec.root]?.expr;
+  const sequence = root?.t === "alt" && root.alts.length === 1 && root.alts[0]!.t === "seq"
+    ? root.alts[0]!
+    : null;
+  const repetition = sequence?.items
+    .map((item) => item.expr)
+    .findLast((expr): expr is Extract<PExpr, { readonly t: "star" | "plus"; }> =>
+      (expr.t === "star" || expr.t === "plus") && expr.recover
+    ) ?? null;
+  const item = repetition?.e ?? incremental.item;
+  if (!repetition) {
+    return { values: [], diagnostics: [], next: startToken };
+  }
+  const machine = new Machine(spec, tokens, options.maxDepth ?? 2048);
+  const values: unknown[] = [];
+  const stop = Math.max(0, Math.min(stopToken, tokens.length - 1));
+  let cursor = Math.max(0, Math.min(startToken, tokens.length - 1));
+  while (cursor < stop) {
+    const token = machine.token(cursor);
+    if (token.kind === "eof") break;
+    if (!item.nullable && !matches(item.first, token)) break;
+    const before = cursor;
+    const reply = machine.parseExpr(item, cursor);
+    if (reply.ok) {
+      if (reply.next === cursor) break;
+      values.push(reply.value);
+      cursor = reply.next;
+      continue;
+    }
+    cursor = machine.recover(repetition, cursor);
+    if (cursor === before) cursor++;
+  }
+  for (let index = startToken; index < cursor && index < tokens.length; index++) {
+    const token = tokens[index]!;
+    if (token.kind !== "error") continue;
+    if (machine.diagnostics.some((entry) => entry.span.start === token.span.start)) continue;
+    machine.diagnostics.push(
+      error(`Unexpected character ${JSON.stringify(token.text)}`, token.span, { code: "parse/character" }),
+    );
+  }
+  return { values, diagnostics: machine.diagnostics, next: cursor };
+};
 
 export const parseSource = <A = unknown>(
   spec: GrammarSpec,

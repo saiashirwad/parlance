@@ -63,7 +63,7 @@ On this machine (10 cores, Node 24.22, `tsgo` 7.1.0-beta):
 - `solver-bench`: 3.2 ms for the sample program, 182 ms for the synthetic 200 case.
 - Full test suite: 17.3 s.
 
-The parser is not pathologically slow, but it is not the foundation for incremental parsing either. Every rule call re-enters parserator, re-runs regexes for trivia and tokens, allocates a `Parser` reply, and only sometimes memoizes.
+These are single-machine medians from the scripts above, not repeated trials across machines, and no CPU profile was captured. Treat them as orders of magnitude, not precise claims. The parser is not pathologically slow, but it is not the foundation for incremental parsing either: every rule call re-enters parserator, re-runs trivia and token regexes, allocates a reply, and only sometimes memoizes. Which share of the 285 ms is regex work versus allocation is unmeasured; the redesign's benchmark is meant to answer that.
 
 ## Assumptions that hold
 
@@ -84,10 +84,10 @@ The parser is not pathologically slow, but it is not the foundation for incremen
 - Every operation must be yielded. A checker reads as `yield*` plumbing rather than domain logic.
 - Stack safety requires a hand-written evaluator (about 250 lines) that is harder to debug than ordinary recursion.
 - Scopes, spans, documents, and facts are ambient state reached through combinators; it is hard to answer "what is in scope here?" from a stack trace.
-- Generators allocate and suspend. Type inference is the hottest semantic path, and it pays that cost.
+- Generators allocate and suspend. We have not profiled this cost in isolation, so it is a hypothesis, not a measured bottleneck.
 - Error recovery is coupled to the monad. A language that wants a different recovery policy has to reimplement it.
 
-Verdict: **drop generators from the public checker API.** Use plain functions over an explicit `Checker` context: `cx.error`, `cx.declare`, `cx.resolve`, `cx.scope`, `cx.typed`. Depth is handled by normal recursion over syntax trees, which are small in practice; the old stack-safety test was protecting a 30k-deep synthetic tree, not a real language. Hard failures use a private `AbortCheck` exception caught at declaration boundaries, not a monad.
+Verdict: **drop generators from the public checker API.** Use plain functions over an explicit `Checker` context: `cx.error`, `cx.declare`, `cx.resolve`, `cx.scope`, `cx.typed`. Depth is handled by normal recursion over syntax trees, with a parser nesting limit and a diagnostic instead of a stack overflow; the old stack-safety test was protecting a 30k-deep synthetic tree, not a real language. Hard failures use a private `AbortCheck` exception caught at declaration boundaries, not a monad.
 
 The rollback behavior is still needed for inference. It moves into the type store (`snapshot` / `rollback`), where it belongs, and is tested there.
 
@@ -95,10 +95,10 @@ The rollback behavior is still needed for inference. It moves into the type stor
 
 parserator is a good combinator library. It is not the right foundation here:
 
-- It re-runs trivia and token regexes at every rule call. The grammar-generated parser spends most of its time re-establishing the same lexical context.
+- It re-runs trivia and token regexes at every rule call. The baseline is consistent with this being expensive, but the split between regex work and allocation is unprofiled.
 - It has no token array, so there is nothing stable to memoize against and nothing to reuse across edits.
 - Error recovery is limited to cuts and expected sets. A language author cannot say "skip to the next declaration" without writing it.
-- The self-hosted grammar interpreter maps grammar expressions to parserator closures at runtime. That is flexible, but it prevents static first/follow sets, static dispatch, and code generation.
+- The self-hosted grammar interpreter maps grammar expressions to parserator closures at runtime. Static first sets are possible over that structure, but the current implementation does not compute or dispatch on them. Self-hosting alone is not the performance win; the token array and dispatch are.
 - The API is a large combinator surface that language authors must learn in addition to their own grammar.
 
 Verdict: **remove parserator as a dependency of the core.** Parse the grammar metalanguage with a small hand-written bootstrap parser, compile grammars to token-based parsers, and keep the runtime parser internal. The bootstrap parser is fixed and testable; generated parsers are data-driven and fast.
@@ -118,19 +118,19 @@ Verdict: **remove the generic JS IR from the core.** Each language defines its o
 
 ### 4. That HM belongs in the library
 
-The higher-rank HM implementation is 429 lines of subtle code (levels, skolemization, row lacks constraints, instantiation). It is excellent work. It is used by two examples and by no other language. Making it a core module implies every language author should use it, and it pulls rows and higher rank into the API.
+The higher-rank HM implementation is 429 lines of subtle code (levels, skolemization, row lacks constraints, instantiation). It is excellent work. It is used by two examples and by no other language. It is a separate import, so it does not force itself on anyone, but its presence sets the default gravity of the library: "type checking" reads as "HM with rows." Four of six examples do not need it.
 
 Verdict: **make type checking a kit, not a requirement.** Core provides diagnostics, spans, bindings, scopes, and facts. `parlance/types` provides an optional small unification-based type store and a TS printer. Domain-specific checkers (schema field types, machine transition legality) use the same `Checker` API without pretending to be HM.
 
 ### 5. That projection should be manual offset arithmetic
 
-`Piece[]` is a low-level representation: `verbatim(text, span)`, `atom(text, span)`, and the author computes every offset by concatenation. The schema host is 295 lines of piece assembly. This is exactly the kind of code agents get subtly wrong: a one-character mismatch in `verbatim` throws, and an atom with the wrong span silently misnavigates.
+`Piece[]` is a low-level representation: `verbatim(text, span)`, `atom(text, span)`, and a list the author assembles by hand. `project` already accumulates virtual offsets correctly, so the problem is not that authors add integers. The problem is ergonomics: the schema host is 295 lines of piece assembly, `verbatim` throws on any length mismatch, and an atom with the wrong span silently misnavigates. The representation invites a class of mistakes without making the correct shape obvious.
 
-Verdict: **replace pieces with a source-mapped template builder.** A tagged template (`ts\`export interface ${id(name)} { ... }\``) records the virtual offset of every interpolated source node as it builds the text. Nested templates flatten. This removes manual offset arithmetic and makes the common case one line per declaration.
+Verdict: **replace pieces with a source-mapped template builder.** A tagged template (`ts\`export interface ${id(name)} { ... }\``) records the virtual offset of every interpolated source node as it builds the text. Nested templates flatten. This keeps the same mapping model, removes the manual assembly, and makes the common case one line per declaration.
 
 ### 6. That the lexer is separate from the grammar
 
-Languages today declare highlighter rules separately from parser tokens. The grammar example has a `tokens` table; the schema has another; they can drift. This is a correctness bug waiting to happen: the editor colors a word as a keyword while the parser treats it as an identifier.
+Most examples declare highlighter rules separately from parser tokens. Reactor is the exception: its token table is derived from the checked grammar. The schema and domain examples keep two descriptions that can drift. That is a correctness bug waiting to happen: the editor colors a word as a keyword while the parser treats it as an identifier.
 
 Verdict: **derive tokens, highlighting, and parser terminals from one grammar.** A grammar declares `skip`, `word`, `token`, and literals; the compiler emits one lexer. Highlighting is a mapping from terminal to token kind, refined by semantic facts.
 

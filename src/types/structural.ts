@@ -152,6 +152,18 @@ export class TypeStore {
     return { kind: "unknown" };
   }
 
+  number(): Type {
+    return { kind: "number" };
+  }
+
+  boolean(): Type {
+    return { kind: "boolean" };
+  }
+
+  string(): Type {
+    return { kind: "string" };
+  }
+
   literal(value: string | number | boolean): Type {
     return { kind: "literal", value };
   }

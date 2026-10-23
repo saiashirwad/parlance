@@ -7,6 +7,8 @@ export {
   line,
   type Mapped,
   mapped,
+  source,
+  synth,
   type Mapping,
   ts,
   type TsDoc,

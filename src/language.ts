@@ -29,6 +29,8 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly checkPartial?: boolean;
 };
 
+export type AnyLanguage = Language<any, any, any>;
+
 export type LanguageOptions<Ast, Ir, Type> = Omit<Language<Ast, Ir, Type>, "checkPartial"> & {
   readonly checkPartial?: boolean;
 };
