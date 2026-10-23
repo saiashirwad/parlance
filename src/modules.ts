@@ -182,8 +182,8 @@ export class ModuleGraph {
         if (diagnostic.severity === "info") continue;
         diagnostics.push(route(withDocument(diagnostic, target), { uri, span: entry.span }));
       }
-      if (!seen.has(target)) {
-        seen.add(target);
+      if (!seen.has(entry.specifier)) {
+        seen.add(entry.specifier);
         dependencies.push({
           specifier: entry.specifier,
           uri: target,

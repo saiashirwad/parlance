@@ -176,8 +176,10 @@ imports `base` and `limit` at runtime.
 
 - No re-export syntax and no named import lists: an import exposes every export of the dependency.
 - No package or bare-specifier resolution. Only URL-relative specifiers resolve.
-- Calc copies binding types from the dependency's `TypeStore`. Primitive and literal types are
-  correct; free type variables from another store are printed as unbound variables.
+- Calc copies binding types from the dependency's `TypeStore`. Closed types (primitives, literals,
+  records, arrays, functions) are reliable. A free variable keeps the dependency store's numeric id,
+  which can collide with an unrelated variable in the importing store; only closed types should be
+  re-exported until types are translated between stores.
 - Machine recognizes and analyzes imports but its checker does not merge imported events or
   states. Schema and calc are the resolved cross-file cases.
 - Cross-file references and rename are single-file. Only definition crosses documents.
