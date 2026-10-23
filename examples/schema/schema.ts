@@ -697,7 +697,6 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         return existing;
       }
       const binding = cx.declare(name.text, name.span, "parameter", field.type, { detail: "parameter" });
-      cx.bind(binding);
       cx.typed(name, field.type);
       const param: ParamIR = {
         name,

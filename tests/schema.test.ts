@@ -198,6 +198,42 @@ test("default errors point at the attribute or its argument", () => {
   });
 });
 
+test("mutation parameters do not leak into the module scope", () => {
+  const program = [
+    "schema Scope",
+    "",
+    "model User {",
+    "  id: Int @primary @auto",
+    "  email: String",
+    "}",
+    "",
+    "model Post {",
+    "  id: Int @primary @auto",
+    "  title: String",
+    "}",
+    "",
+    "insert User { email: $Post }",
+    "insert Post { title: $title }",
+    "",
+  ].join("\n");
+  const analysis = analyze(schema, program, "memory://schema/scope");
+  assert.deepEqual(analysis.diagnostics, []);
+  const model = analysis.facts.definitions.find((definition) =>
+    definition.name === "Post" && definition.kind === "class"
+  );
+  const parameter = analysis.facts.definitions.find((definition) =>
+    definition.name === "Post" && definition.kind === "parameter"
+  );
+  assert.ok(model, "missing the Post model binding");
+  assert.ok(parameter, "missing the $Post parameter binding");
+  const at = program.indexOf("insert Post") + "insert ".length;
+  const reference = analysis.facts.references.find((entry) => entry.span.start === at);
+  assert.ok(reference, "missing a reference on the second mutation's model name");
+  assert.equal(reference.id, model.id, "the model name resolved to the previous mutation's parameter");
+  const parameterUse = program.indexOf("$Post") + 1;
+  assert.deepEqual(parameter.span, { start: parameterUse, end: parameterUse + "Post".length });
+});
+
 test("accepted mutations mix literals, enum members, and bound parameters", () => {
   const program = `schema Accepted
 
