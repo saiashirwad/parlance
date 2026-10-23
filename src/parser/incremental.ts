@@ -1,6 +1,6 @@
 import { type Diagnostic, sortDiagnostics } from "../diagnostic.ts";
 import { type Span } from "../source.ts";
-import { lex, lexFrom } from "./lex.ts";
+import { lexFrom } from "./lex.ts";
 import {
   type Edit,
   type ItemRange,
@@ -134,16 +134,16 @@ const selectWindow = (items: readonly Item[], edit: Edit): readonly [number, num
   return [Math.max(0, low - 1), Math.min(count - 1, high + 1)];
 };
 
-const lookaround = /\(\?<?[=!]/;
+const lookbehind = /\(\?<[=!]/;
 
-const localLexing = new WeakMap<GrammarSpec, boolean>();
+const tailReuse = new WeakMap<GrammarSpec, boolean>();
 
 /**
- * A regex with a lookaround can decide a token from text outside the token.
- * Only then does reusing tokens before an edit need a full-stream comparison.
+ * A lookbehind at a shifted position can read text before the resync boundary,
+ * where the two sources differ. Those grammars lex to the end instead.
  */
-const locallyLexable = (spec: GrammarSpec): boolean => {
-  const cached = localLexing.get(spec);
+const reusableTail = (spec: GrammarSpec): boolean => {
+  const cached = tailReuse.get(spec);
   if (cached !== undefined) return cached;
   const patterns = [
     ...spec.skips.map((pattern) => pattern.source),
@@ -151,20 +151,9 @@ const locallyLexable = (spec: GrammarSpec): boolean => {
     ...spec.tokens.map((token) => token.regex.source),
     ...spec.inline.map((inline) => inline.regex.source),
   ];
-  const value = !patterns.some((pattern) => lookaround.test(pattern));
-  localLexing.set(spec, value);
+  const value = !patterns.some((pattern) => lookbehind.test(pattern));
+  tailReuse.set(spec, value);
   return value;
-};
-
-const countTokenEndsBy = (tokens: readonly LexToken[], offset: number): number => {
-  let low = 0;
-  let high = tokens.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (tokens[middle]!.span.end <= offset) low = middle + 1;
-    else high = middle;
-  }
-  return low;
 };
 
 const tokenStartingAt = (tokens: readonly LexToken[], offset: number): number => {
@@ -176,17 +165,6 @@ const tokenStartingAt = (tokens: readonly LexToken[], offset: number): number =>
     else high = middle;
   }
   return low < tokens.length && tokens[low]!.span.start === offset ? low : -1;
-};
-
-const countTriviaEndsBy = (trivia: readonly Trivia[], offset: number): number => {
-  let low = 0;
-  let high = trivia.length;
-  while (low < high) {
-    const middle = (low + high) >> 1;
-    if (trivia[middle]!.span.end <= offset) low = middle + 1;
-    else high = middle;
-  }
-  return low;
 };
 
 const countTriviaStartsBefore = (trivia: readonly Trivia[], offset: number): number => {
@@ -211,18 +189,17 @@ const shiftTrivia = (entry: Trivia, delta: number): Trivia => ({
 });
 
 /**
- * Reuse the previous token stream around the edit.
+ * Reuse the previous token tail after an edit.
  *
- * Tokens before the last token that ends before the edit are reused: their text
- * and lexer start are unchanged. The token straddling the edit start is relexed
- * so a merge at the boundary is seen. If any reused token is an error, lexing
- * restarts at the first one, because its extent (an unclosed quote, for
- * example) can depend on text after the edit.
+ * The stream is lexed from offset 0. A token regex can match a longer string
+ * after an edit, so tokens before the edit are not reused on a guess about how
+ * far a change can reach.
  *
- * Lexing stops at the first boundary at or after the unchanged suffix where the
+ * Lexing stops at the first boundary at or after the inserted text where the
  * produced token equals the previous token shifted by `delta`. From that offset
- * the remaining source text is identical and the lexer holds no state, so the
- * shifted previous tail is the exact tokenization.
+ * the remaining source text is identical, so the shifted previous tail is the
+ * exact tokenization. Lookbehind can read across that boundary, so
+ * `reusableTail` turns reuse off for grammars that use it.
  */
 const relex = (
   spec: GrammarSpec,
@@ -232,21 +209,13 @@ const relex = (
   delta: number,
 ): TokenList => {
   const old = previous.tokens;
-  let restartIndex = countTokenEndsBy(old, edit.start) - 1;
-  for (let index = 0; index < restartIndex; index++) {
-    if (old[index]!.kind !== "error") continue;
-    restartIndex = index;
-    break;
-  }
-  const restartOffset = restartIndex < 0 ? 0 : old[restartIndex]!.span.start;
-  const prefixCount = Math.max(0, restartIndex);
   const resyncFrom = edit.start + edit.insert.length;
-  let resyncBase = -1;
-  const run = lexFrom(spec, source, restartOffset, (tokens, offset) => {
+  let resync = -1;
+  const stop = (tokens: readonly LexToken[], offset: number): boolean => {
     if (offset < resyncFrom) return false;
     const token = tokens[tokens.length - 1]!;
     const index = tokenStartingAt(old, token.span.start - delta);
-    if (index < restartIndex) return false;
+    if (index < 0) return false;
     const before = old[index]!;
     if (
       token.kind !== before.kind
@@ -254,11 +223,12 @@ const relex = (
       || token.name !== before.name
       || token.span.end !== before.span.end + delta
     ) return false;
-    resyncBase = index;
+    resync = index;
     return true;
-  });
+  };
+  const run = lexFrom(spec, source, 0, reusableTail(spec) ? stop : undefined);
 
-  const tailFrom = resyncBase + 1;
+  const tailFrom = resync + 1;
   let tailTokens: readonly LexToken[];
   if (tailFrom <= 0 || tailFrom >= old.length) {
     tailTokens = [];
@@ -269,9 +239,6 @@ const relex = (
     for (let index = 0; index < tail.length; index++) tail[index] = shiftToken(old[tailFrom + index]!, delta);
     tailTokens = tail;
   }
-  const tokens = old.slice(0, prefixCount).concat(run.tokens, tailTokens);
-
-  const prefixTrivia = previous.trivia.slice(0, countTriviaEndsBy(previous.trivia, restartOffset));
   let tailTrivia: readonly Trivia[] = [];
   if (tailFrom > 0 && tailFrom < old.length) {
     const from = countTriviaStartsBefore(previous.trivia, old[tailFrom - 1]!.span.end);
@@ -283,8 +250,7 @@ const relex = (
       tailTrivia = tail;
     }
   }
-  const trivia = prefixTrivia.concat(run.trivia, tailTrivia);
-  return { tokens, trivia };
+  return { tokens: run.tokens.concat(tailTokens), trivia: run.trivia.concat(tailTrivia) };
 };
 
 export const reparse = <A>(
@@ -345,34 +311,7 @@ export const reparse = <A>(
   const mapEnd = (offset: number): number =>
     offset < edit.start ? offset : offset >= edit.end ? offset + delta : edit.start + edit.insert.length;
 
-  let tokens: readonly LexToken[];
-  let trivia: readonly Trivia[];
-  if (locallyLexable(spec)) {
-    ({ tokens, trivia } = relex(spec, previous, source, edit, delta));
-  } else {
-    // A lookaround can make tokenization outside the edit depend on text
-    // inside it; compare the whole stream before reusing any AST.
-    const lexed = lex(spec, source);
-    const unchangedOutsideEdit = (): boolean => {
-      let next = 0;
-      for (const old of previous.tokens) {
-        if (old.kind === "eof") continue;
-        if (old.span.end > edit.start && old.span.start < edit.end) continue;
-        const expected = old.span.start >= edit.end ? old.span.start + delta : old.span.start;
-        while (next < lexed.tokens.length && lexed.tokens[next]!.span.start < expected) next++;
-        const token = lexed.tokens[next];
-        if (
-          !token || token.span.start !== expected || token.kind !== old.kind
-          || token.text !== old.text || token.name !== old.name
-        ) return false;
-        next++;
-      }
-      return true;
-    };
-    if (!unchangedOutsideEdit()) return fallback();
-    tokens = lexed.tokens;
-    trivia = lexed.trivia;
-  }
+  const { tokens, trivia } = relex(spec, previous, source, edit, delta);
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
   let end = high;

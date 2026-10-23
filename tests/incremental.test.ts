@@ -238,9 +238,29 @@ test("tokenization can change before the edit: distant quote, merged boundaries"
     end: at('let a = "one";\nlet b = "two";\n', '"two"') + 1,
     insert: "",
   }, strings.spec, (source) => strings.parse(source));
+
+  const risky = parseGrammar(String.raw`
+grammar Risky
+skip /\s+/
+token T /a[^z]*z|a/
+root File
+rule File = { @file items:Decl* };
+rule Decl = { @item value:$T ";" };
+`);
+  assert.equal(risky.ok, true, risky.ok ? "" : JSON.stringify(risky.diagnostics));
+  if (!risky.ok) throw new Error("unreachable");
+  const risk = compileGrammar(risky.file);
+  assert.equal(risk.valid, true, risk.diagnostics.map((entry) => entry.message).join("\n"));
+  // The first token grows across every later token when the last a becomes z.
+  const grows = "a; a; a; a; a; a; a; a; a; a;";
+  check("a token that reaches back across the edit", grows, {
+    start: grows.length - 2,
+    end: grows.length - 1,
+    insert: "z",
+  }, risk.spec, (value) => risk.parse(value));
 });
 
-test("lookaround grammars take the guarded full-lex path", () => {
+test("lookaround grammars reparse correctly", () => {
   const parsed = parseGrammar(String.raw`
 grammar Look
 skip /\s+/
@@ -262,6 +282,29 @@ rule Name = { word };
   check("lookahead: replace a tag", source, { start: at(source, ":"), end: at(source, ":") + 1, insert: ";" }, look.spec, (value) =>
     look.parse(value));
   check("lookahead: insert before a tag", source, { start: 0, end: 0, insert: "set z;\n" }, look.spec, (value) => look.parse(value));
+
+  const behindParsed = parseGrammar(String.raw`
+grammar Behind
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+token Value /(?<=:)[A-Za-z]+/
+root File
+rule File = { @file items:Decl* };
+rule Decl = {
+  | @item name:Name ":" value:$Value ";"
+};
+rule Name = { word };
+`);
+  assert.equal(behindParsed.ok, true, behindParsed.ok ? "" : JSON.stringify(behindParsed.diagnostics));
+  if (!behindParsed.ok) throw new Error("unreachable");
+  const behind = compileGrammar(behindParsed.file);
+  assert.equal(behind.valid, true, behind.diagnostics.map((entry) => entry.message).join("\n"));
+  const behindSource = "a:one;\nb:two;\nc:three;\n";
+  check("lookbehind: rename a value", behindSource, {
+    start: at(behindSource, "two"),
+    end: at(behindSource, "two") + 3,
+    insert: "four",
+  }, behind.spec, (value) => behind.parse(value));
 });
 
 test("root spans keep recovery regions and headers", () => {
