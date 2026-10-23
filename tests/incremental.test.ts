@@ -407,6 +407,17 @@ rule Decl = { @item "item" name:word ";" };
   assert.deepEqual(removed.diagnostics, removedFull.diagnostics);
   assert.equal(removed.ok, removedFull.ok);
 
+  const brokenSource = source.replace("item d;", "item d");
+  const brokenEdit = { start: source.indexOf("item d;") + "item d".length, end: source.indexOf("item d;") + "item d;".length, insert: "" };
+  const broken = reparse(wrapped.spec, wrapped.parse(source), brokenSource, brokenEdit, {
+    previousSource: source,
+  });
+  const brokenFull = wrapped.parse(brokenSource);
+  assert.equal(broken.stats.fallback, true, "a malformed item in a guarded root must not patch the footer");
+  assert.deepEqual(broken.value, brokenFull.value);
+  assert.deepEqual(broken.diagnostics, brokenFull.diagnostics);
+  assert.equal(broken.ok, brokenFull.ok);
+
   const appendedSource = `${source}\nitem e;`;
   const appendedEdit = { start: source.length, end: source.length, insert: "\nitem e;" };
   const appended = reparse(wrapped.spec, wrapped.parse(source), appendedSource, appendedEdit, {

@@ -382,6 +382,11 @@ export const reparse = <A>(
     }
   }
 
+  // A guarded root keeps header/footer syntax outside the parsed window. A
+  // malformed item could otherwise make the window parser skip into that
+  // syntax, so diagnostics inside a guarded window force a full parse.
+  if (incremental.guarded && range.diagnostics.some((entry) => entry.severity === "error")) return fallback();
+
   const repairedStart = tokens[startToken]!.span.start;
   const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
 
