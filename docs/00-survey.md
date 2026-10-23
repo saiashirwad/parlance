@@ -188,3 +188,18 @@ An interpreted grammar over a token array should be substantially faster than pa
 - Highlighting and basic editor facts still work on syntactically invalid input.
 - One definition per language. No parallel highlighter, no per-language host script.
 - The core has no required type system, no required runtime, and no required target.
+
+## Follow-up measurement: the parser bet
+
+On 2026-10-23 the redesigned parser was compared with this checkout on the same
+grammar and corpus (`docs/07-comparison.md`). The old parserator parser parses
+about 1.7× faster at batch sizes from 20k to 200k declarations (about 39–42
+MB/s versus 22–24 MB/s). Grammar-to-callable-parser compilation is about 5×
+faster in parlance, and incremental edits are 30–37% of a full parse, which the
+old checkout does not have.
+
+The survey's expectation that a token array would be substantially faster than
+parserator is therefore not supported. The likely cost is per-token allocation
+and AST/span construction, but that needs a profile. Issue #9 covers
+memoization or a generated per-rule backend; issue #13 covers the remaining
+prefix lexing.
