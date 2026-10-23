@@ -1,4 +1,4 @@
-import { type Binding, type Checker, type Facts, semanticTokens, type Token } from "./check/index.ts";
+import { type Binding, Checker, type Facts, semanticTokens, type Token } from "./check/index.ts";
 import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
 import type { LexToken, Trivia } from "./parser/spec.ts";
@@ -64,7 +64,7 @@ export const analyze = <Ast, Ir, Type>(
   source: string,
   uri = "memory://input",
 ): Analysis<Ast, Ir, Type> => {
-  const parsed = language.grammar.parse<Ast>(source);
+  const parsed = language.grammar.parse(source);
   const lexical = language.grammar.highlight(source);
   const checker = new Checker<Type>(uri, source, lexical, parsed.diagnostics);
   let ir: Ir | null = null;
@@ -83,7 +83,7 @@ export const analyze = <Ast, Ir, Type>(
   const facts: Facts<Type> = {
     ...checker.facts,
     diagnostics: [...diagnostics],
-    tokens: semanticTokens({ ...checker.facts, diagnostics: [...diagnostics] }),
+    tokens: [...semanticTokens({ ...checker.facts, diagnostics: [...diagnostics] })],
   };
   return {
     language,
