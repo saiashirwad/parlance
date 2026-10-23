@@ -465,19 +465,17 @@ export const reparse = <A>(
     const root = previous.value as Record<string, unknown>;
     const clone = { ...root, [field]: spliced };
     const oldRootSpan = root.span as Span | undefined;
-    const extra = Object.keys(root)
-      .filter((key) => key !== "kind" && key !== "span" && key !== field)
-      .flatMap((key) => {
-        const span = (root[key] as { readonly span?: Span; } | null)?.span;
-        return span ? [span] : [];
-      });
     const firstOld = items[0]?.span;
     const lastOld = items[items.length - 1]?.span;
-    const hasHeader = firstOld !== undefined && extra.some((span) => span.start < firstOld.start);
-    const hasFooter = lastOld !== undefined && extra.some((span) => span.end > lastOld.end);
+    const rootStartsBeforeItems = oldRootSpan !== undefined && firstOld !== undefined && oldRootSpan.start < firstOld.start;
+    const rootEndsAfterItems = oldRootSpan !== undefined && lastOld !== undefined && oldRootSpan.end > lastOld.end;
     const first = spliced[0];
     const last = spliced[spliced.length - 1];
-    const start = hasHeader && oldRootSpan
+    // A window at token 0 reparsed every leading recovery token, so the root
+    // starts where the token stream does.
+    const start = startToken === 0
+      ? tokens[0]!.span.start
+      : rootStartsBeforeItems && oldRootSpan
       ? mapOffset(oldRootSpan.start)
       : first && isItem(first)
       ? first.span.start
@@ -485,10 +483,10 @@ export const reparse = <A>(
     const lastEnd = last && isItem(last) ? last.span.end : start;
     // The root repetition spans the recovery tokens it skipped, not just its
     // items, so a repaired tail can reach past the last item.
-    const rootEnd = hasFooter && oldRootSpan
-      ? mapEnd(oldRootSpan.end)
-      : end === count - 1
+    const rootEnd = end === count - 1
       ? Math.max(lastEnd, repairedEnd)
+      : rootEndsAfterItems && oldRootSpan
+      ? mapEnd(oldRootSpan.end)
       : lastEnd;
     clone.span = { start, end: rootEnd };
     value = clone;
