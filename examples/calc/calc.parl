@@ -1,0 +1,40 @@
+grammar Calc
+
+skip /\s+/
+skip /\/\/[^\n]*/
+
+word /[A-Za-z_][A-Za-z0-9_]*/
+
+token Number /\d+(?:\.\d+)?/
+
+root File
+
+rule File = {
+  @file declarations:Decl*
+};
+
+rule Decl = {
+  | @let "let" ~ name:Name "=" ~ value:Expr ";"
+  | @show "show" ~ value:Expr ";"
+};
+
+rule Expr = precedence {
+  left "==" | "!="
+  left "+" | "-"
+  left "*" | "/"
+  prefix "-" | "!"
+  atom
+    | @number value:$Number
+    | @boolean value:BooleanLit
+    | @name value:Name
+    | "(" value:Expr ")"
+};
+
+rule BooleanLit = {
+  | value:"true"
+  | value:"false"
+};
+
+rule Name = {
+  word
+};

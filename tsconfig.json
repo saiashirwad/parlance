@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "types": ["node"],
+    "module": "NodeNext",
+    "strict": true,
+    "erasableSyntaxOnly": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "contentMappers": [
+    {
+      "package": "@parlance/ts-host",
+      "extensions": [".calc", ".machine", ".schema"],
+      "options": { "config": "./parlance.config.ts" }
+    }
+  ],
+  "include": ["src", "examples", "tests", "tools", "packages"]
+}

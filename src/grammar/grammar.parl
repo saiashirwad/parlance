@@ -1,0 +1,85 @@
+grammar Grammar
+
+skip /\s+/
+skip /\/\/[^\n]*/
+skip /\/\*[\s\S]*?\*\//
+
+word /[A-Za-z_][A-Za-z0-9_]*/
+
+token String /"(?:[^"\\\r\n]|\\.)*"/
+token Regex /\/(?:[^\/\\\r\n\[]|\\.|\[(?:[^\]\\\r\n]|\\.)*\])+\//
+
+root File
+
+rule File = {
+  @grammar "grammar" ~ name:Name
+    skips:Skip*
+    word:Word?
+    tokens:TokenDecl*
+    root:Root?
+    rules:Rule*
+};
+
+rule Skip = { @skip "skip" ~ pattern:$Regex };
+rule Word = { @word "word" ~ pattern:$Regex };
+rule TokenDecl = { @token "token" ~ name:Name pattern:$Regex highlight:Highlight? };
+rule Highlight = { @highlight "@" name:word };
+rule Root = { @root "root" ~ rule:Name };
+rule Rule = {
+  | @rule "rule" ~ name:Name "=" ~ body:Body ";"
+  | @rule "rule" ~ name:Name "=" ~ "{" body:Alternatives "}" ";"
+};
+
+rule Body = {
+  | Precedence
+  | @alternatives alts:Alternatives
+};
+
+rule Precedence = {
+  @precedence "precedence" ~ "{" levels:Level* "atom" atom:Alternatives "}"
+};
+
+rule Alternatives = { "|"? alts:sep1(Alternative, "|") };
+
+rule Alternative = { @alternative tag:Tag? items:Item+ };
+rule Tag = { "@" name:word };
+rule Item = { @item label:Label? expr:Unary };
+rule Label = { name:word ":" };
+
+rule Unary = {
+  | @and "&" expr:Unary
+  | @not "!" expr:Unary
+  | @star expr:Primary "*"
+  | @plus expr:Primary "+"
+  | @opt expr:Primary "?"
+  | Primary
+};
+
+rule Primary = {
+  | @lit text:$String
+  | @re source:$Regex
+  | @token "$" name:word
+  | @word "word"
+  | @cut "~"
+  | @group "(" alts:Alternatives ")"
+  | @sep "sep" "(" item:Unary "," separator:Unary ")"
+  | @sep1 "sep1" "(" item:Unary "," separator:Unary ")"
+  | @sepEnd "sepEnd" "(" item:Unary "," separator:Unary ")"
+  | @sepEnd1 "sepEnd1" "(" item:Unary "," separator:Unary ")"
+  | @ref name:Ref
+};
+
+rule Ref = { value:word };
+
+rule Level = { @level assoc:Assoc operators:sep1(Operator, "|") };
+rule Operator = { !AssocWord value:Unary };
+rule AssocWord = { "left" | "right" | "none" | "prefix" | "postfix" | "atom" };
+rule Assoc = {
+  | value:"left"
+  | value:"right"
+  | value:"none"
+  | value:"prefix"
+  | value:"postfix"
+};
+
+rule Name = { word };

@@ -1,0 +1,16 @@
+{
+  "name": "@parlance/ts-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": { "parlance-ts-host": "./bin.mjs" },
+  "dependencies": {
+    "parlance": "workspace:*"
+  },
+  "typescript": {
+    "contentMapper": {
+      "exec": ["node", "./bin.mjs"],
+      "dynamicConfig": true
+    }
+  }
+}

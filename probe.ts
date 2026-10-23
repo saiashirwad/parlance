@@ -1,0 +1,16 @@
+import { readFileSync } from "node:fs";
+import { parseGrammar } from "./src/grammar/parse.ts";
+import { compileGrammar } from "./src/grammar/compile.ts";
+import { render } from "./src/diagnostic.ts";
+const g = readFileSync("./src/grammar/grammar.parl", "utf8");
+const boot = parseGrammar(g);
+if (!boot.ok) process.exit(1);
+const cg = compileGrammar(boot.file, "grammar.parl");
+console.log("compile", cg.valid, cg.diagnostics.map(d=>d.message));
+const p = cg.parse(g);
+for (const d of p.diagnostics) console.log("SELF", d.span, d.message, "\n", render(d,g));
+const calc = compileGrammar((parseGrammar(readFileSync("./examples/calc/calc.parl","utf8")) as any).file, "calc.parl");
+const src = "let a = 1;\nlet = 2;\nlet c = 3;\n";
+const r = calc.parse(src);
+console.log("recovery value", r.value, "diagnostics", r.diagnostics.map(d=>d.message));
+for (const d of r.diagnostics) console.log(render(d,src));

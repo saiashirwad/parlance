@@ -1,0 +1,4 @@
+node_modules
+.parlance
+*.tsbuildinfo
+.DS_Store
