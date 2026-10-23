@@ -24,7 +24,9 @@
     "typecheck": "tsc --noEmit --runExternalCode",
     "bench": "node tools/bench.ts",
     "gen": "node src/grammar/cli.ts",
-    "cli": "node src/cli.ts"
+    "cli": "node src/cli.ts",
+    "nvim:smoke": "nvim --headless -u NONE -l tools/nvim-smoke.lua",
+    "nvim:check": "sh tools/nvim-exrc-check.sh"
   },
   "dependencies": {
     "vscode-languageserver": "^10.1.2",

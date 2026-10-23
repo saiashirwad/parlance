@@ -24,6 +24,12 @@ pnpm check
 
 The check prints one `ok` line per file. The Node command prints `250` from the `show` in `demo.calc`, then `250 125 true` from `examples/typescript/calc.ts`. `pnpm check` runs the typecheck, the tests, the three example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation into guest files.
 
+## Neovim
+
+The repository-local `.nvim.lua` registers one `parlance` client for `.calc`, `.schema`, and `.machine` files, enables semantic tokens, and scopes the servers to this checkout. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
+
+See [`docs/06-neovim.md`](docs/06-neovim.md) for keymaps, a global config for other parlance projects, and troubleshooting.
+
 ## Define a language
 
 `examples/calc/calc.ts` ends with the real definition:
@@ -62,6 +68,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/03-incremental.md`](docs/03-incremental.md): reparse, token reuse, soundness guards, and measurements.
 - [`docs/04-authoring.md`](docs/04-authoring.md): a step-by-step guide to adding a language.
 - [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
+- [`docs/06-neovim.md`](docs/06-neovim.md): project-local LSP wiring, keymaps, verification, and troubleshooting.
 
 ## Status
 
@@ -80,7 +87,7 @@ Not built:
 
 - Incremental checking.
 - Formatting.
-- Workspace symbols and formatting.
+- Workspace symbols and signature help.
 - Source maps for runtime stack traces.
 - Publishing. The package is private and has no 1.0 milestone.
 
