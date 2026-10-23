@@ -49,6 +49,20 @@ repository.
 Cross-file navigation currently covers definition, references, and rename.
 Workspace symbols and signature help are not implemented.
 
+## TypeScript imports
+
+`.nvim.lua` also sets `runExternalCode = true` on the `tsc` client when its root
+is this checkout. That is required for the TypeScript 7 content mapper to
+execute `@parlance/ts-host` while transforming a guest import. With the
+`nvim-lspconfig` tsc setup from the dotfiles, open
+`examples/typescript/calc.ts` and hover or `gd` on `subtotal`; it resolves into
+`examples/calc/demo.calc`.
+
+The first hover can be empty for a second while `tsc` initializes the project.
+Retry once diagnostics settle. If no `tsc` client appears, check that the
+project's local TypeScript is 7.x and that `nvim-lspconfig`'s `tsc` config is
+enabled.
+
 ## How the wiring works
 
 `.nvim.lua` registers the filetypes, then one server named `parlance`:

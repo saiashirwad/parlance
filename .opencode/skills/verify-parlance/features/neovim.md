@@ -35,5 +35,6 @@ They assert a client on each filetype, hover `number`, definition line 1, non-em
 - An untrusted `.nvim.lua` silently does nothing in headless runs. Interactively, choose view and run `:trust`; `nvim:check` trusts only a throwaway state directory.
 - `vim.lsp.semantic_tokens.start` is deprecated on 0.12; the config uses `enable` and falls back for 0.11.
 - The server does not format. Formatting stays with Conform or another tool.
+- TypeScript imports need the `tsc` client from nvim-lspconfig and `runExternalCode`; `.nvim.lua` sets the option only for this checkout. The first hover can be empty until the project loads.
 - Completion is grammar keywords plus top-level definitions; local-scope filtering is still open.
 - The global-config snippet in `docs/06-neovim.md` needs `PARLIANCE_HOME` pointing at this checkout.
