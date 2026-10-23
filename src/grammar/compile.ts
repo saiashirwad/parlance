@@ -1,4 +1,4 @@
-import { type Diagnostic, error, sortDiagnostics } from "../diagnostic.ts";
+import { type Diagnostic, error, sortDiagnostics, warning } from "../diagnostic.ts";
 import { type Span, type Text } from "../source.ts";
 import { tokenKinds, type TokenKind, type Token } from "../check/facts.ts";
 import { lex as lexTokens } from "../parser/lex.ts";
@@ -796,6 +796,51 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     }
   };
   annotated.forEach(nullableLoop);
+
+  // Ordered choice picks the first alternative that succeeds. If one before the
+  // last can match nothing, every later alternative is unreachable.
+  const unreachableChoice = (expr: PExpr): void => {
+    switch (expr.t) {
+      case "alt": {
+        const index = expr.alts.findIndex((alternative, at) => at < expr.alts.length - 1 && nullableOf(alternative));
+        if (index >= 0) {
+          diagnostics.push(warning(
+            `Alternative ${index + 1} can match nothing, so later alternatives are unreachable`,
+            expr.alts[index]!.span,
+            { code: "grammar/unreachable-alternative" },
+          ));
+        }
+        for (const alternative of expr.alts) unreachableChoice(alternative);
+        return;
+      }
+      case "seq":
+        for (const item of expr.items) unreachableChoice(item.expr);
+        return;
+      case "star":
+      case "plus":
+      case "opt":
+      case "and":
+      case "not":
+        unreachableChoice(expr.e);
+        return;
+      case "sep":
+        unreachableChoice(expr.item);
+        unreachableChoice(expr.separator);
+        return;
+      case "precedence":
+        unreachableChoice(expr.atom);
+        for (const level of expr.levels) for (const operator of level.operators) unreachableChoice(operator);
+        return;
+      case "lit":
+      case "word":
+      case "token":
+      case "re":
+      case "ref":
+      case "cut":
+        return;
+    }
+  };
+  annotated.forEach(unreachableChoice);
 
   const leading = annotated.map(() => new Set<number>());
   const leadingOf = (expr: PExpr): Set<number> => {

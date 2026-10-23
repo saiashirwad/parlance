@@ -127,7 +127,9 @@ Compilation fails, with grammar spans, on:
 - repetitions or separated lists that can match nothing
 - duplicate field labels in one tagged alternative
 
-Ordered choice is allowed when first sets overlap. The compiler only warns (not errors) when an earlier alternative is nullable, because later alternatives are then unreachable. Cuts and predicates are evaluated in order.
+Ordered choice is allowed when first sets overlap. The compiler warns (not errors) when an earlier alternative is nullable, because later alternatives are then unreachable. Cuts and predicates are evaluated in order.
+
+Diagnostics carry a code (`grammar/left-recursion`, `grammar/nullable-loop`, `grammar/unreachable-alternative`, `grammar/unused-rule`, and so on) and a span in the grammar file. A grammar with an error never produces a parser; warnings do not block compilation.
 
 ## Recovery
 

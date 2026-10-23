@@ -109,6 +109,26 @@ rule B = { "y" };
   assert.match(unused.compiled.diagnostics.map((entry) => entry.message).join("\n"), /Unused rule: B/);
 });
 
+test("a nullable earlier alternative warns that later alternatives are unreachable", () => {
+  const choice = compile(`
+grammar Choice
+skip /\\s+/
+root File
+rule File = { Maybe? | "x" };
+rule Maybe = { "m" };
+`);
+  const messages = choice.compiled.diagnostics.map((entry) => `${entry.severity}: ${entry.message}`).join("\n");
+  assert.match(messages, /warning: Alternative 1 can match nothing, so later alternatives are unreachable/);
+  assert.equal(choice.compiled.valid, true);
+
+  const distinct = compile(`
+grammar Distinct
+root File
+rule File = { "a" | "b" };
+`);
+  assert.deepEqual(distinct.compiled.diagnostics, []);
+});
+
 test("source spans of text captures point at the captured characters", () => {
   const { compiled } = load(calcSource);
   const source = "let abc = 42;";
