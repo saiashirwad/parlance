@@ -54,7 +54,7 @@ const steps: readonly Step[] = [
   {
     name: "run schema against node:sqlite",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/schema.ts"],
-    expect: ["sai@example.com 0 0"],
+    expect: ["sai@example.com 1 1 0 1 1 1 0"],
   },
   {
     name: "run machine through the Node loader",

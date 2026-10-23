@@ -6,13 +6,16 @@ enum PostStatus { Draft Published }
 model User {
   id: Int @primary @auto
   email: String @unique
-  role: Role
+  role: Role @default(Member)
+  createdAt: DateTime @default(now)
 }
 
 model Post {
   id: Int @primary @auto
   title: String
-  status: PostStatus
+  status: PostStatus @default(Draft)
+  views: Int @default(0)
+  createdAt: DateTime @default(now)
   authorId: User
 }
 
@@ -24,3 +27,11 @@ query publishedPosts(limit: Int): Post[] =
 
 query draftCount(): Int =
   Post |> where status == Draft |> count;
+
+insert User { email: $email, role: $role }
+
+insert Post { title: $title, status: $status, authorId: $authorId }
+
+update Post |> where id == $id |> set status = $status
+
+delete Post |> where id == $id
