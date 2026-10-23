@@ -12,7 +12,15 @@ rule File = {
 };
 
 rule Event = {
-  @event "event" name:Name
+  @event "event" name:Name payload:Payload?
+};
+
+rule Payload = {
+  @payload "(" fields:sep(Field, ",") ")"
+};
+
+rule Field = {
+  @field name:Name ":" type:Name
 };
 
 rule StateDecl = {
@@ -22,7 +30,11 @@ rule StateDecl = {
 };
 
 rule Transition = {
-  @transition "on" event:Name "->" target:Name
+  @transition "on" event:Name binding:Binding? "->" target:Name
+};
+
+rule Binding = {
+  @binding "(" fields:sep1(Name, ",") ")"
 };
 
 rule Name = { word };

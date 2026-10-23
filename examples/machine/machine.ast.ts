@@ -17,10 +17,28 @@ export type File = FileMachineNode;
 export interface EventEventNode {
   readonly kind: "event";
   readonly name: Name;
+  readonly payload: Payload | null;
   readonly span: Span;
 }
 
 export type Event = EventEventNode;
+
+export interface PayloadPayloadNode {
+  readonly kind: "payload";
+  readonly fields: readonly Field[];
+  readonly span: Span;
+}
+
+export type Payload = PayloadPayloadNode;
+
+export interface FieldFieldNode {
+  readonly kind: "field";
+  readonly name: Name;
+  readonly type: Name;
+  readonly span: Span;
+}
+
+export type Field = FieldFieldNode;
 
 export interface StateDeclInitialNode {
   readonly kind: "initial";
@@ -50,10 +68,19 @@ export type StateDecl =
 export interface TransitionTransitionNode {
   readonly kind: "transition";
   readonly event: Name;
+  readonly binding: Binding | null;
   readonly target: Name;
   readonly span: Span;
 }
 
 export type Transition = TransitionTransitionNode;
+
+export interface BindingBindingNode {
+  readonly kind: "binding";
+  readonly fields: readonly Name[];
+  readonly span: Span;
+}
+
+export type Binding = BindingBindingNode;
 
 export type Name = Text;
