@@ -99,19 +99,21 @@ for (const count of [50, 500]) {
   results.push(measure(`schema ${count} models`, schema.grammar, source, source.indexOf("model M" + Math.floor(count / 2)) + 8));
 }
 
-console.table(results.map((result) => ({
-  name: result.name,
-  KB: Math.round(result.bytes / 1024),
-  tokens: result.tokens,
-  "lex ms": result.lexMs.toFixed(2),
-  "parse ms": result.parseMs.toFixed(2),
-  "MB/s": result.mbPerSecond.toFixed(1),
-  "edit ms": result.incrementalMs?.toFixed(3) ?? "-",
-  reused: result.reused ?? "-",
-  reparsed: result.reparsed ?? "-",
-})));
-
-if (process.argv.includes("--json")) console.log(JSON.stringify(results, null, 2));
+if (process.argv.includes("--json")) {
+  console.log(JSON.stringify(results, null, 2));
+} else {
+  console.table(results.map((result) => ({
+    name: result.name,
+    KB: Math.round(result.bytes / 1024),
+    tokens: result.tokens,
+    "lex ms": result.lexMs.toFixed(2),
+    "parse ms": result.parseMs.toFixed(2),
+    "MB/s": result.mbPerSecond.toFixed(1),
+    "edit ms": result.incrementalMs?.toFixed(3) ?? "-",
+    reused: result.reused ?? "-",
+    reparsed: result.reparsed ?? "-",
+  })));
+}
 
 const sample = calcCorpus(200);
 const analysis = analyze(calc, sample, "memory://bench.calc");

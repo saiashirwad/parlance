@@ -61,13 +61,13 @@ At 100,000 calc declarations (2.8 MB, 900,006 tokens), `pnpm bench` reports:
 
 | phase | ms |
 | --- | ---: |
-| lex the whole file | 57 |
-| full parse | 126 (22.8 MB/s) |
-| middle edit | 20 (16% of a full parse) |
+| lex the whole file | 56 |
+| full parse | 119 (24.2 MB/s) |
+| middle edit | 16 (14% of a full parse) |
 | reused items | 99,998 of 100,000 |
 
-The old comparison grammar (4.18 MB, 1,000,001 tokens) measures 54 ms, or
-77 MB/s, and a middle edit takes 14.6 ms (27% of a full parse). The old langkit
+The old comparison grammar (4.18 MB, 1,000,001 tokens) measures 48 ms, or
+87 MB/s, and a middle edit takes 14.4 ms (30% of a full parse). The old langkit
 parserator parser measures 102 ms on the same corpus.
 
 The edit path is still linear in the distance from offset 0 to the edit, because
@@ -79,15 +79,15 @@ sound for `token T /a[^z]*z|a/` and similar grammars.
 
 `node tools/bench-lsp.ts` measures the editor path on the same corpus:
 
-| corpus | full analyze | edit + analyze | semantic tokens | folding |
-| --- | ---: | ---: | ---: | ---: |
-| 2,000 declarations (50 KB) | 6.0 ms | 1.6 ms | 0.7 ms | 0.05 ms |
-| 20,000 declarations (543 KB) | 33.5 ms | 12.0 ms | 6.4 ms | 0.5 ms |
-| 100,000 declarations (2.8 MB) | 217 ms | 94 ms | 43 ms | 2.6 ms |
+| corpus | full analyze | check only | edit + analyze | semantic tokens | folding |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2,000 declarations (50 KB) | 4.2 ms | 0.5 ms | 1.2 ms | 0.7 ms | 0.05 ms |
+| 20,000 declarations (543 KB) | 30.5 ms | 7.0 ms | 9.5 ms | 6.6 ms | 0.5 ms |
+| 100,000 declarations (2.8 MB) | 221 ms | 51 ms | 64 ms | 45 ms | 2.5 ms |
 
 `analyzeParsed` leaves semantic tokens lazy, so a keystroke does not pay for
 them. On the 100k file the edit path is mostly the language checker (about
-70 ms) rather than reparse (about 19 ms).
+45–50 ms) rather than reparse (about 20 ms).
 
 ## Verification
 

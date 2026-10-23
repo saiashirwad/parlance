@@ -162,7 +162,7 @@ Performance comes from three choices, not from self-hosting by itself:
 - **Static dispatch.** First sets let a choice skip alternatives that cannot start at the current token; most backtracking disappears.
 - **Reuse.** Token-indexed nodes and top-level item spans make incremental reparse possible.
 
-An interpreted grammar over a token array should be substantially faster than parserator. If it is not, the fallback is to emit a specialized recursive-descent function per rule. That decision is settled by the benchmark in `docs/04-incremental.md` and `tools/bench.ts`, not by taste.
+An interpreted grammar over a token array should be substantially faster than parserator. If it is not, the fallback is to emit a specialized recursive-descent function per rule. That decision is settled by the benchmark in `docs/07-comparison.md` and `tools/bench.ts`, not by taste.
 
 ## What survives, rewritten
 
@@ -192,14 +192,16 @@ An interpreted grammar over a token array should be substantially faster than pa
 ## Follow-up measurement: the parser bet
 
 On 2026-10-23 the redesigned parser was compared with this checkout on the same
-grammar and corpus (`docs/07-comparison.md`). The old parserator parser parses
-about 1.7× faster at batch sizes from 20k to 200k declarations (about 39–42
-MB/s versus 22–24 MB/s). Grammar-to-callable-parser compilation is about 5×
-faster in parlance, and incremental edits are 30–37% of a full parse, which the
-old checkout does not have.
+grammar and corpus (`docs/07-comparison.md`). A first token-array version was
+still about 1.7× slower than parserator. The measured cause was per-token
+`LexToken` and nested `Span` allocation, not the token array. After moving
+tokens into parallel typed arrays, parlance parses about 2.1× faster at batch
+sizes from 20k to 200k declarations (about 78–87 MB/s versus 36–41 MB/s).
+Grammar-to-callable-parser compilation is about 4.5× faster (0.09 ms versus
+0.41 ms), and incremental edits are 29–45% of a full parse, which the old
+checkout does not have.
 
-The survey's expectation that a token array would be substantially faster than
-parserator is therefore not supported. The likely cost is per-token allocation
-and AST/span construction, but that needs a profile. Issue #9 covers
-memoization or a generated per-rule backend; issue #13 covers the remaining
-prefix lexing.
+The survey was right about the token-array direction but wrong about where the
+time went: allocation shape dominated. `tools/compare-langkit.mjs --gate` keeps
+the head-to-head ratio at or below 0.75× on an idle machine. Issue #13 covers
+the remaining prefix lexing.

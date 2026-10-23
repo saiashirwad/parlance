@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type Binding, type Checker } from "../../src/check/index.ts";
+import { type Binding, type Checker, type Spanned } from "../../src/check/index.ts";
 import { type Diagnostic, error } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
@@ -62,82 +62,102 @@ const sameKind = (store: TypeStore, left: Type, right: Type): boolean => {
   return base(a) === base(b) && ["number", "boolean", "string"].includes(base(a));
 };
 
-const checkExpr = (expr: Expr, cx: Checker<Type>, store: TypeStore): { ir: CalcExpr; type: Type } => {
+/** `result` holds the type of the expression just checked. */
+type ExprContext = { readonly cx: Checker<Type>; readonly store: TypeStore; result: Type };
+
+const expectNumber = (context: ExprContext, type: Type, at: Spanned): void => {
+  const mark = context.store.mark();
+  if (context.store.unify(type, num(context.store))) return;
+  context.store.restore(mark);
+  context.cx.error(`Expected number, found ${display(context.store, type)}`, at);
+};
+
+const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
+  const { cx, store } = context;
   switch (expr.kind) {
     case "number": {
-      const type = store.literal(Number(expr.value.text));
+      const value = Number(expr.value.text);
+      const type = store.literal(value);
       cx.typed(expr, type);
-      return { ir: { kind: "number", value: Number(expr.value.text) }, type };
+      context.result = type;
+      return { kind: "number", value };
     }
     case "boolean": {
       const value = expr.value.text === "true";
       const type = store.literal(value);
       cx.typed(expr, type);
-      return { ir: { kind: "boolean", value }, type };
+      context.result = type;
+      return { kind: "boolean", value };
     }
     case "name": {
       const binding = cx.resolve(expr.value.text, expr.value.span);
       if (!binding) {
         cx.error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
-        return { ir: { kind: "number", value: 0 }, type: store.unknown() };
+        const type = store.unknown();
+        context.result = type;
+        return { kind: "number", value: 0 };
       }
       const type = binding.type ?? store.unknown();
       cx.typed(expr, type);
-      return { ir: { kind: "name", binding }, type };
+      context.result = type;
+      return { kind: "name", binding };
     }
     case "binary": {
-      const left = checkExpr(expr.left, cx, store);
-      const right = checkExpr(expr.right, cx, store);
+      const left = checkExpr(expr.left, context);
+      const leftType = context.result;
+      const right = checkExpr(expr.right, context);
+      const rightType = context.result;
       const operator = expr.operator.text;
       if (operator === "==" || operator === "!=") {
-        if (!sameKind(store, left.type, right.type)) {
+        if (!sameKind(store, leftType, rightType)) {
           cx.error(
-            `Cannot compare ${display(store, left.type)} with ${display(store, right.type)}`,
+            `Cannot compare ${display(store, leftType)} with ${display(store, rightType)}`,
             expr.operator,
           );
         }
         const type = boolean(store);
         cx.typed(expr, type);
-        return { ir: { kind: "binary", operator, left: left.ir, right: right.ir }, type };
+        context.result = type;
+        return { kind: "binary", operator, left, right };
       }
-      for (const [side, at] of [[left, expr.left], [right, expr.right]] as const) {
-        const check = store.snapshot();
-        if (!store.unify(side.type, num(store))) {
-          check();
-          cx.error(`Expected number, found ${display(store, side.type)}`, at);
-        }
-      }
+      expectNumber(context, leftType, expr.left);
+      expectNumber(context, rightType, expr.right);
       const type = num(store);
       cx.typed(expr, type);
-      return { ir: { kind: "binary", operator, left: left.ir, right: right.ir }, type };
+      context.result = type;
+      return { kind: "binary", operator, left, right };
     }
     case "prefix": {
-      const operand = checkExpr(expr.operand, cx, store);
+      const operand = checkExpr(expr.operand, context);
+      const operandType = context.result;
       const operator = expr.operator.text;
       const expected = operator === "!" ? boolean(store) : num(store);
-      const check = store.snapshot();
-      if (!store.unify(operand.type, expected)) {
-        check();
-        cx.error(`Expected ${display(store, expected)}, found ${display(store, operand.type)}`, expr.operand);
+      const mark = store.mark();
+      if (!store.unify(operandType, expected)) {
+        store.restore(mark);
+        cx.error(`Expected ${display(store, expected)}, found ${display(store, operandType)}`, expr.operand);
       }
       const type = operator === "!" ? boolean(store) : num(store);
       cx.typed(expr, type);
-      return { ir: { kind: "prefix", operator, operand: operand.ir }, type };
+      context.result = type;
+      return { kind: "prefix", operator, operand };
     }
     case "postfix": {
       cx.error("Postfix operators are not defined in calc", expr);
-      return { ir: { kind: "number", value: 0 }, type: store.unknown() };
+      const type = store.unknown();
+      context.result = type;
+      return { kind: "number", value: 0 };
     }
   }
 };
 
 const check = (file: File, cx: Checker<Type>): CalcModule => {
   const store = new TypeStore();
+  const context: ExprContext = { cx, store, result: store.unknown() };
   const declarations: CalcDecl[] = [];
   const imports: CalcImport[] = [];
   let result: CalcExpr | null = null;
   let resultType: Type | null = null;
-  const names = new Set<string>();
   const importedFrom = new Map<string, string>();
   for (const dependency of cx.dependencies.all) {
     const bindings: { exported: string; binding: Binding<Type> }[] = [];
@@ -157,12 +177,12 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       const binding = cx.imported(name);
       if (!binding) continue;
       importedFrom.set(name, dependency.specifier);
-      names.add(name);
       bindings.push({ exported: name, binding });
     }
     if (bindings.length > 0) imports.push({ specifier: dependency.specifier, bindings });
   }
-  for (const declaration of file.declarations) {
+  for (let index = 0; index < file.declarations.length; index++) {
+    const declaration = file.declarations[index]!;
     if (declaration.kind === "import") continue;
     if (declaration.kind === "let") {
       const name = declaration.name;
@@ -170,21 +190,21 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
         cx.error(`${JSON.stringify(name.text)} is reserved in TypeScript and JavaScript`, name);
         continue;
       }
-      if (names.has(name.text)) {
+      if (cx.resolve(name.text, undefined)) {
         cx.error(`Duplicate name ${JSON.stringify(name.text)}`, name);
         continue;
       }
-      names.add(name.text);
-      const value = checkExpr(declaration.value, cx, store);
-      const binding = cx.declare(name.text, name.span, "variable", value.type);
+      const value = checkExpr(declaration.value, context);
+      const valueType = context.result;
+      const binding = cx.declare(name.text, name.span, "variable", valueType);
       cx.bind(binding);
-      cx.typed(name, value.type);
-      declarations.push({ kind: "let", name, binding, value: value.ir });
+      cx.typed(name, valueType);
+      declarations.push({ kind: "let", name, binding, value });
     } else {
-      const value = checkExpr(declaration.value, cx, store);
-      declarations.push({ kind: "show", value: value.ir });
-      result = value.ir;
-      resultType = value.type;
+      const value = checkExpr(declaration.value, context);
+      declarations.push({ kind: "show", value });
+      result = value;
+      resultType = context.result;
     }
   }
   return { declarations, imports, result, resultType };

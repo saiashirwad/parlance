@@ -240,13 +240,25 @@ export class ModuleGraph {
       incremental,
       { dependencies, diagnostics },
     );
-    const exports = new Map<string, Binding>();
-    if (analysis.ir !== null && language.exports) {
-      for (const binding of language.exports(analysis.ir)) {
-        exports.set(binding.name, binding.uri === undefined ? { ...binding, uri } : binding);
-      }
-    }
-    const node: ModuleNode = { uri, language, source, analysis, exports, imports: edges };
+    let exports: Map<string, Binding> | null = null;
+    const node: ModuleNode = {
+      uri,
+      language,
+      source,
+      analysis,
+      imports: edges,
+      get exports() {
+        if (exports === null) {
+          exports = new Map();
+          if (analysis.ir !== null && language.exports) {
+            for (const binding of language.exports(analysis.ir)) {
+              exports.set(binding.name, binding.uri === undefined ? { ...binding, uri } : binding);
+            }
+          }
+        }
+        return exports;
+      },
+    };
     this.#nodes.set(uri, node);
     if (!this.#order.includes(uri)) this.#order.push(uri);
     return node;

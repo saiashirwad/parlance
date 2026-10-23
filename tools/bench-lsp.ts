@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { analyze, analyzeParsed } from "../src/language.ts";
+import { ModuleGraph } from "../src/modules.ts";
 import { reparse } from "../src/parser/incremental.ts";
 import { diff } from "../src/source.ts";
 import { encodeAnalysis, folding } from "../src/lsp/semantic.ts";
@@ -10,7 +11,9 @@ type Row = {
   readonly name: string;
   readonly bytes: number;
   readonly fullMs: number;
+  readonly checkMs: number;
   readonly updateMs: number;
+  readonly graphMs: number;
   readonly insertMs: number;
   readonly semanticMs: number;
   readonly foldingMs: number;
@@ -57,6 +60,15 @@ for (const count of [2_000, 20_000, 100_000]) {
     if (!updated.valid) throw new Error(`${count}: edited corpus does not check`);
   };
 
+  const graph = new ModuleGraph({ languages: [calc], read: () => null });
+  graph.analyze("memory://bench.calc", { source });
+  const updateThroughGraph = (next: string, edit: NonNullable<typeof replacement>): void => {
+    const parsed = reparse(calc.grammar.spec, analysis.parse, next, edit, { previousSource: source });
+    if (parsed.stats.fallback) throw new Error(`${count}: incremental reparse fell back`);
+    const updated = graph.analyze("memory://bench.calc", { source: next, parsed, incremental: parsed.stats });
+    if (!updated.valid) throw new Error(`${count}: edited corpus does not check`);
+  };
+
   rows.push({
     name: `calc ${count.toLocaleString("en-US")} decls`,
     bytes: source.length,
@@ -64,21 +76,30 @@ for (const count of [2_000, 20_000, 100_000]) {
       const fresh = analyze(calc, source, "memory://bench.calc");
       if (!fresh.valid) throw new Error("full analyze failed");
     }, 1, 5),
+    checkMs: measure(() => {
+      const checked = analyzeParsed(calc, source, "memory://bench.calc", analysis.parse, null);
+      if (!checked.valid) throw new Error("check failed");
+    }, 1, 7),
     updateMs: measure(() => update(replaced, replacement), 1, 7),
     insertMs: measure(() => update(inserted, insertion), 1, 7),
     semanticMs: measure(() => encodeAnalysis(document, analysis), 2, 7),
     foldingMs: measure(() => folding(analysis.lex, document, calc.grammar.spec), 2, 7),
+    graphMs: measure(() => updateThroughGraph(replaced, replacement), 1, 7),
   });
 }
 
-console.table(rows.map((row) => ({
-  corpus: row.name,
-  KB: Math.round(row.bytes / 1024),
-  "full analyze ms": row.fullMs.toFixed(2),
-  "edit + analyze ms": row.updateMs.toFixed(2),
-  "insert + analyze ms": row.insertMs.toFixed(2),
-  "semantic tokens ms": row.semanticMs.toFixed(2),
-  "folding ms": row.foldingMs.toFixed(2),
-})));
-
-if (process.argv.includes("--json")) console.log(JSON.stringify(rows, null, 2));
+if (process.argv.includes("--json")) {
+  console.log(JSON.stringify(rows, null, 2));
+} else {
+  console.table(rows.map((row) => ({
+    corpus: row.name,
+    KB: Math.round(row.bytes / 1024),
+    "full analyze ms": row.fullMs.toFixed(2),
+    "check only ms": row.checkMs.toFixed(2),
+    "edit + analyze ms": row.updateMs.toFixed(2),
+    "graph edit ms": row.graphMs.toFixed(2),
+    "insert + analyze ms": row.insertMs.toFixed(2),
+    "semantic tokens ms": row.semanticMs.toFixed(2),
+    "folding ms": row.foldingMs.toFixed(2),
+  })));
+}

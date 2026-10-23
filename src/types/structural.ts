@@ -15,6 +15,13 @@ export type Type =
 
 export type PrintProblem = { readonly text: string; readonly problem: string | undefined };
 
+const UNKNOWN: Type = { kind: "unknown" };
+const NEVER: Type = { kind: "never" };
+const NUMBER: Type = { kind: "number" };
+const BOOLEAN: Type = { kind: "boolean" };
+const STRING: Type = { kind: "string" };
+const SMALL_LITERALS: (Type | undefined)[] = new Array(4096);
+
 type Context = "top" | "element" | "member";
 
 type Renderer = {
@@ -143,29 +150,49 @@ export class TypeStore {
   #next = 0;
   #links = new Map<number, Type>();
   #undo: { readonly id: number; readonly previous: Type | undefined }[] = [];
+  #numbers = new Map<number, Type>();
+  #strings = new Map<string, Type>();
+  #booleans: readonly [Type, Type] = [{ kind: "literal", value: false }, { kind: "literal", value: true }];
 
   fresh(): Type {
     return { kind: "variable", id: this.#next++ };
   }
 
   unknown(): Type {
-    return { kind: "unknown" };
+    return UNKNOWN;
   }
 
   number(): Type {
-    return { kind: "number" };
+    return NUMBER;
   }
 
   boolean(): Type {
-    return { kind: "boolean" };
+    return BOOLEAN;
   }
 
   string(): Type {
-    return { kind: "string" };
+    return STRING;
   }
 
   literal(value: string | number | boolean): Type {
-    return { kind: "literal", value };
+    if (typeof value === "string") {
+      let type = this.#strings.get(value);
+      if (type === undefined) {
+        type = { kind: "literal", value };
+        this.#strings.set(value, type);
+      }
+      return type;
+    }
+    if (typeof value === "boolean") return this.#booleans[value ? 1 : 0]!;
+    if (Number.isInteger(value) && value >= 0 && value < SMALL_LITERALS.length) {
+      return SMALL_LITERALS[value] ?? (SMALL_LITERALS[value] = { kind: "literal", value });
+    }
+    let type = this.#numbers.get(value);
+    if (type === undefined) {
+      type = { kind: "literal", value };
+      this.#numbers.set(value, type);
+    }
+    return type;
   }
 
   function(param: Type, result: Type): Type {
@@ -200,16 +227,18 @@ export class TypeStore {
       flat.push(value);
     };
     for (const member of members) add(member);
-    if (flat.length === 0) return { kind: "never" };
+    if (flat.length === 0) return NEVER;
     if (flat.length === 1) return flat[0]!;
     return { kind: "union", members: flat };
   }
 
   prune(type: Type): Type {
     let current = type;
-    const seen = new Set<number>();
+    if (current.kind !== "variable") return current;
+    let seen: Set<number> | undefined;
     while (current.kind === "variable") {
-      if (seen.has(current.id)) return current;
+      if (seen === undefined) seen = new Set();
+      else if (seen.has(current.id)) return current;
       seen.add(current.id);
       const next = this.#links.get(current.id);
       if (next === undefined) return current;
@@ -270,15 +299,16 @@ export class TypeStore {
     }
   }
 
-  snapshot(): () => void {
-    const mark = this.#undo.length;
-    return () => {
-      while (this.#undo.length > mark) {
-        const entry = this.#undo.pop()!;
-        if (entry.previous === undefined) this.#links.delete(entry.id);
-        else this.#links.set(entry.id, entry.previous);
-      }
-    };
+  mark(): number {
+    return this.#undo.length;
+  }
+
+  restore(mark: number): void {
+    while (this.#undo.length > mark) {
+      const entry = this.#undo.pop()!;
+      if (entry.previous === undefined) this.#links.delete(entry.id);
+      else this.#links.set(entry.id, entry.previous);
+    }
   }
 
   show(type: Type): string {
@@ -318,7 +348,7 @@ export class TypeStore {
   }
 
   #normalize(type: Type): Type {
-    return type.kind === "union" && type.members.length === 0 ? { kind: "never" } : type;
+    return type.kind === "union" && type.members.length === 0 ? NEVER : type;
   }
 
   #bind(variable: Type, value: Type): boolean {
@@ -361,9 +391,9 @@ export class TypeStore {
     const members = left.kind === "union" ? left.members : right.kind === "union" ? right.members : [];
     const other = left.kind === "union" ? right : left;
     for (const member of members) {
-      const restore = this.snapshot();
+      const mark = this.mark();
       if (this.unify(member, other)) return true;
-      restore();
+      this.restore(mark);
     }
     return false;
   }

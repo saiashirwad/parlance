@@ -185,16 +185,16 @@ test("snapshots nest and restore only their own links", () => {
   const store = new TypeStore();
   const a = store.fresh();
   const b = store.fresh();
-  const outer = store.snapshot();
+  const outer = store.mark();
   store.link(a, numberType);
-  const inner = store.snapshot();
+  const inner = store.mark();
   store.link(b, stringType);
   assert.equal(store.prune(a).kind, "number");
   assert.equal(store.prune(b).kind, "string");
-  inner();
+  store.restore(inner);
   assert.equal(store.prune(a).kind, "number");
   assert.equal(store.prune(b).kind, "variable");
-  outer();
+  store.restore(outer);
   assert.equal(store.prune(a).kind, "variable");
   assert.equal(store.prune(b).kind, "variable");
 });
@@ -310,11 +310,11 @@ test("unify agrees in both directions for generated pairs", () => {
   for (let index = 0; index < 120; index++) {
     const left = generate(store, random);
     const right = generate(store, random);
-    const restore = store.snapshot();
+    const mark = store.mark();
     const forward = store.unify(left, right);
-    restore();
+    store.restore(mark);
     const backward = store.unify(right, left);
-    restore();
+    store.restore(mark);
     assert.equal(forward, backward);
   }
 });

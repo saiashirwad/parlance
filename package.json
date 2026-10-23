@@ -28,7 +28,8 @@
     "cli": "node src/cli.ts",
     "nvim:smoke": "nvim --headless -u NONE -l tools/nvim-smoke.lua",
     "nvim:check": "sh tools/nvim-exrc-check.sh",
-    "compare:langkit": "node tools/compare-langkit.mjs"
+    "compare:langkit": "node tools/compare-langkit.mjs",
+    "compare:gate": "node tools/compare-langkit.mjs --gate"
   },
   "dependencies": {
     "vscode-languageserver": "^10.1.2",
