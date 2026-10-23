@@ -161,3 +161,39 @@ test("the LSP publishes calc diagnostics on broken input", async () => {
     client.close();
   }
 });
+
+test("the generic LSP serves a state-machine language without new server code", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../examples/machine/order.machine", import.meta.url), "utf8");
+  const machineUri = pathToFileURL("/virtual/order.machine").href;
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const published = await client.open(machineUri, source);
+    assert.deepEqual(published.params.diagnostics, []);
+
+    const symbols = await client.request("textDocument/documentSymbol", { textDocument: { uri: machineUri } });
+    const names = symbols.result.map((symbol: Message) => symbol.name);
+    for (const name of ["Order", "Cart", "Checkout", "Paid", "Cancelled", "edit", "pay", "cancel"]) {
+      assert.ok(names.includes(name), `missing symbol ${name}`);
+    }
+
+    const line = source.split("\n").findIndex((entry) => entry.includes("on pay -> Checkout"));
+    const character = source.split("\n")[line]!.indexOf("Checkout");
+    const hover = await client.request("textDocument/hover", {
+      textDocument: { uri: machineUri },
+      position: { line, character },
+    });
+    assert.match(hover.result.contents.value, /state Checkout/);
+
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri: machineUri },
+      position: { line, character },
+    });
+    const targetLine = source.split("\n").findIndex((entry) => entry.includes("state Checkout"));
+    assert.equal(definition.result.range.start.line, targetLine);
+  } finally {
+    client.close();
+  }
+});

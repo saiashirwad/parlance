@@ -11,7 +11,7 @@ type NodeShape = {
   readonly rule: string;
   readonly tag: string;
   readonly signature: string;
-  fields: readonly Field[] | null;
+  readonly fields: readonly Field[];
 };
 
 type FixedNode = {
@@ -137,53 +137,6 @@ const pascal = (value: string): string =>
 
 const propertyName = (value: string): string =>
   /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(value) ? value : JSON.stringify(value);
-
-/** A stable description of an alternative that ignores spans and formatting. */
-const alternativeSignature = (alternative: Alternative): string =>
-  JSON.stringify([
-    alternative.tag === null ? null : alternative.tag.text,
-    alternative.items.map((item) => [
-      item.label === null ? null : item.label.text,
-      unarySignature(item.expr),
-    ]),
-  ]);
-
-const unarySignature = (unary: Unary): string => {
-  switch (unary.kind) {
-    case "and":
-    case "not":
-    case "star":
-    case "plus":
-    case "opt":
-      return `${unary.kind}(${unarySignature(unary.expr)})`;
-    default:
-      return primarySignature(unary);
-  }
-};
-
-const primarySignature = (primary: Primary): string => {
-  switch (primary.kind) {
-    case "lit":
-      return `lit:${JSON.stringify(primary.text.text)}`;
-    case "re":
-      return `re:${JSON.stringify(primary.source.text)}`;
-    case "token":
-      return `token:${primary.name.text}`;
-    case "word":
-      return "word";
-    case "cut":
-      return "cut";
-    case "ref":
-      return `ref:${primary.name.text}`;
-    case "group":
-      return `group(${primary.alts.map(alternativeSignature).join(",")})`;
-    case "sep":
-    case "sep1":
-    case "sepEnd":
-    case "sepEnd1":
-      return `${primary.kind}(${unarySignature(primary.item)},${unarySignature(primary.separator)})`;
-  }
-};
 
 /** Independent re-derivation of compile.ts's capture decision, used for untagged sequences. */
 const capturesOfItem = (item: Item): boolean =>
@@ -328,31 +281,6 @@ export const generateTypes = (file: GrammarFile): Generated => {
 
   const nodeFor = (alternative: Alternative, rule: string): string => {
     const tag = alternative.tag!.text;
-    const signature = alternativeSignature(alternative);
-    const key = `${rule}\u0000${tag}`;
-    const list = shapes.get(key) ?? [];
-    const existing = list.find((shape) => shape.signature === signature);
-    if (existing) return existing.name;
-
-    const base = `${rule}${pascal(tag)}Node`;
-    const candidate = list.length === 0 ? base : `${base}${list.length + 1}`;
-    const name = allocateName(
-      candidate,
-      alternative.span,
-      `Generated name ${candidate} collides with an existing type`,
-    );
-    const shape: NodeShape = { name, rule, tag, signature, fields: null };
-    list.push(shape);
-    shapes.set(key, list);
-    nodeOrder.push(shape);
-    if (list.length > 1) {
-      diagnostics.push(warning(
-        `Tag @${tag} in rule ${rule} has more than one field shape; emitting ${name}`,
-        alternative.span,
-        { code: "grammar-types/tag-shape" },
-      ));
-    }
-
     const fields: Field[] = [];
     const seen = new Set<string>();
     for (const item of alternative.items) {
@@ -376,7 +304,31 @@ export const generateTypes = (file: GrammarFile): Generated => {
       seen.add(label);
       fields.push({ name: label, type: renderType(valueOfUnary(item.expr, rule)) });
     }
-    shape.fields = fields;
+
+    const signature = JSON.stringify(fields.map((field) => [field.name, field.type]));
+    const key = `${rule}\u0000${tag}`;
+    const list = shapes.get(key) ?? [];
+    const existing = list.find((shape) => shape.signature === signature);
+    if (existing) return existing.name;
+
+    const base = `${rule}${pascal(tag)}Node`;
+    const candidate = list.length === 0 ? base : `${base}${list.length + 1}`;
+    const name = allocateName(
+      candidate,
+      alternative.span,
+      `Generated name ${candidate} collides with an existing type`,
+    );
+    const shape: NodeShape = { name, rule, tag, signature, fields };
+    list.push(shape);
+    shapes.set(key, list);
+    nodeOrder.push(shape);
+    if (list.length > 1) {
+      diagnostics.push(warning(
+        `Tag @${tag} in rule ${rule} has more than one field shape; emitting ${name}`,
+        alternative.span,
+        { code: "grammar-types/tag-shape" },
+      ));
+    }
     return name;
   };
 
@@ -531,7 +483,7 @@ export const generateTypes = (file: GrammarFile): Generated => {
     const ruleType = ruleTypes.get(raw)!;
     for (const shape of nodeOrder) {
       if (shape.rule !== raw) continue;
-      chunks.push(renderInterface(shape.name, shape.tag, shape.fields ?? []));
+      chunks.push(renderInterface(shape.name, shape.tag, shape.fields));
     }
     for (const fixed of precedence.get(raw) ?? []) chunks.push(renderFixed(fixed, ruleType));
     chunks.push(renderAlias(ruleType, membersFor(raw)));

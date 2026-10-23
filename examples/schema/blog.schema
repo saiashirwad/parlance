@@ -1,0 +1,26 @@
+schema Blog
+
+enum Role { Member Admin }
+enum PostStatus { Draft Published }
+
+model User {
+  id: Int @primary @auto
+  email: String @unique
+  role: Role
+}
+
+model Post {
+  id: Int @primary @auto
+  title: String
+  status: PostStatus
+  authorId: User
+}
+
+query userByEmail(email: String): User? =
+  User |> where email == email |> first;
+
+query publishedPosts(limit: Int): Post[] =
+  Post |> where status == Published |> orderBy id desc |> limit limit |> all;
+
+query draftCount(): Int =
+  Post |> where status == Draft |> count;

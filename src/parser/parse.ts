@@ -451,6 +451,8 @@ export type ItemRange = {
   readonly diagnostics: readonly Diagnostic[];
   /** Token index the range parse stopped at. */
   readonly next: number;
+  /** First-token set of the item rule. */
+  readonly first: ReadonlySet<Key>;
 };
 
 /**
@@ -465,7 +467,9 @@ export const parseItemRange = (
   options: ParseOptions = {},
 ): ItemRange => {
   const incremental = spec.incremental;
-  if (!incremental || tokens.length === 0) return { values: [], diagnostics: [], next: startToken };
+  if (!incremental || tokens.length === 0) {
+    return { values: [], diagnostics: [], next: startToken, first: new Set<Key>() };
+  }
   const root = spec.rules[spec.root]?.expr;
   const sequence = root?.t === "alt" && root.alts.length === 1 && root.alts[0]!.t === "seq"
     ? root.alts[0]!
@@ -475,10 +479,10 @@ export const parseItemRange = (
     .findLast((expr): expr is Extract<PExpr, { readonly t: "star" | "plus"; }> =>
       (expr.t === "star" || expr.t === "plus") && expr.recover
     ) ?? null;
-  const item = repetition?.e ?? incremental.item;
   if (!repetition) {
-    return { values: [], diagnostics: [], next: startToken };
+    return { values: [], diagnostics: [], next: startToken, first: new Set<Key>() };
   }
+  const item = repetition.e;
   const machine = new Machine(spec, tokens, options.maxDepth ?? 2048);
   const values: unknown[] = [];
   const stop = Math.max(0, Math.min(stopToken, tokens.length - 1));
@@ -498,7 +502,7 @@ export const parseItemRange = (
     cursor = machine.recover(repetition, cursor);
     if (cursor === before) cursor++;
   }
-  for (let index = startToken; index < cursor && index < tokens.length; index++) {
+  for (let index = startToken; index < Math.max(cursor, stop) && index < tokens.length; index++) {
     const token = tokens[index]!;
     if (token.kind !== "error") continue;
     if (machine.diagnostics.some((entry) => entry.span.start === token.span.start)) continue;
@@ -506,7 +510,7 @@ export const parseItemRange = (
       error(`Unexpected character ${JSON.stringify(token.text)}`, token.span, { code: "parse/character" }),
     );
   }
-  return { values, diagnostics: machine.diagnostics, next: cursor };
+  return { values, diagnostics: machine.diagnostics, next: cursor, first: item.first };
 };
 
 export const parseSource = <A = unknown>(

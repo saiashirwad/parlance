@@ -1,0 +1,24 @@
+machine Order {
+  event edit
+  event pay
+  event cancel
+
+  initial state Cart {
+    on edit -> Cart
+    on pay -> Checkout
+    on cancel -> Cancelled
+  }
+
+  state Checkout {
+    on edit -> Checkout
+    on pay -> Paid
+    on cancel -> Cancelled
+  }
+
+  state Paid {
+    on edit -> Paid
+    on cancel -> Cancelled
+  }
+
+  final state Cancelled {}
+}

@@ -1,0 +1,28 @@
+grammar Machine
+
+skip /\s+/
+skip /\/\/[^\n]*/
+
+word /[A-Za-z_][A-Za-z0-9_]*/
+
+root File
+
+rule File = {
+  @machine "machine" name:Name "{" events:Event* states:StateDecl* "}"
+};
+
+rule Event = {
+  @event "event" name:Name
+};
+
+rule StateDecl = {
+  | @initial "initial" "state" name:Name "{" transitions:Transition* "}"
+  | @state "state" name:Name "{" transitions:Transition* "}"
+  | @final "final" "state" name:Name "{" "}"
+};
+
+rule Transition = {
+  @transition "on" event:Name "->" target:Name
+};
+
+rule Name = { word };

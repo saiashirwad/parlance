@@ -9,7 +9,7 @@ import {
   parseItemRange,
   parseSource,
 } from "./parse.ts";
-import type { GrammarSpec, LexToken } from "./spec.ts";
+import type { GrammarSpec, Key, LexToken } from "./spec.ts";
 
 export type IncrementalOptions = ParseOptions & {
   /** Compare against a full parse and fall back on any difference. */
@@ -83,6 +83,23 @@ const stopTokenAt = (tokens: readonly LexToken[], offset: number): number => {
     else high = middle;
   }
   return Math.min(low, tokens.length - 1);
+};
+
+const startsItem = (token: LexToken, sync: ReadonlySet<Key>): boolean => {
+  switch (token.kind) {
+    case "word":
+      return sync.has(`word:${token.text}`) || sync.has("word");
+    case "symbol":
+      return sync.has(`symbol:${token.text}`);
+    case "token":
+      return sync.has(`token:${token.name}`);
+    case "regex":
+      return sync.has(`regex:${token.index ?? 0}`);
+    case "eof":
+      return false;
+    case "error":
+      return sync.has(`symbol:${token.text}`);
+  }
 };
 
 const selectWindow = (items: readonly Item[], edit: Edit): readonly [number, number] => {
@@ -171,15 +188,20 @@ export const reparse = <A>(
   const tokens = lexed.tokens;
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
-  const windowStart = low < 0 ? 0 : items[low]!.span.start;
   let end = high;
-  const startToken = low <= 0 ? 0 : startTokenAt(tokens, mapOffset(items[low]!.span.start));
+  const startToken = low <= 0 ? 0 : startTokenAt(tokens, mapOffset(items[low - 1]!.span.end));
   let range: ItemRange | null = null;
+  let stop = 0;
   if (count === 0 || low < 0) {
-    range = parseItemRange(spec, tokens, 0, tokens.length - 1, parseOptions);
+    stop = tokens.length - 1;
+    const parsed = parseItemRange(spec, tokens, 0, stop, parseOptions);
+    if (parsed.next !== stop) return fallback();
+    range = parsed;
   } else {
     for (let attempt = 0; attempt < 3; attempt++) {
-      const stop = stopTokenAt(tokens, mapEnd(items[end]!.span.end));
+      stop = end === count - 1
+        ? tokens.length - 1
+        : stopTokenAt(tokens, mapEnd(items[end]!.span.end));
       const parsed = parseItemRange(spec, tokens, startToken, stop, parseOptions);
       if (parsed.next === stop) {
         range = parsed;
@@ -192,6 +214,16 @@ export const reparse = <A>(
       break;
     }
     if (!range) return fallback();
+    if (
+      stop < tokens.length - 1
+      && end < count - 1
+      && range.first.size > 0
+      && !startsItem(tokens[stop]!, range.first)
+    ) {
+      // The root repetition would stop at this token, so items after the
+      // window could not have been parsed in a full parse.
+      return fallback();
+    }
   }
 
   const before = count === 0 || low < 0 ? [] : items.slice(0, low);
@@ -238,16 +270,23 @@ export const reparse = <A>(
     const clone = { ...root, [field]: spliced };
     const start = tokens[0]!.span.start;
     const last = spliced[spliced.length - 1];
-    clone.span = { start, end: last && isItem(last) ? last.span.end : start };
+    const rootEnd = (count === 0 || low < 0 || end === count - 1) && range.next > 0
+      ? tokens[range.next - 1]!.span.end
+      : last && isItem(last) ? last.span.end : start;
+    clone.span = { start, end: rootEnd };
     value = clone;
   }
 
-  const oldEnd = count === 0 || low < 0 ? oldLength : items[end]!.span.end;
+  const repairedStart = tokens[startToken]!.span.start;
+  const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
   const kept: Diagnostic[] = [];
   for (const entry of previous.diagnostics) {
-    if (entry.span.end <= windowStart) kept.push(entry);
-    else if (entry.span.start >= oldEnd) {
-      kept.push({ ...entry, span: { start: mapOffset(entry.span.start), end: mapOffset(entry.span.end) } });
+    const start = mapOffset(entry.span.start);
+    const end = mapOffset(entry.span.end);
+    if (end <= repairedStart) {
+      kept.push({ ...entry, span: { start, end } });
+    } else if (start >= repairedEnd) {
+      kept.push({ ...entry, span: { start, end } });
     }
   }
   const diagnostics = sortDiagnostics([...kept, ...range.diagnostics]);

@@ -363,6 +363,22 @@ test("a rule named Text is renamed without breaking the helper", () => {
   assert.doesNotMatch(generated.text, /export type Text = Text;/);
 });
 
+test("tagged alternatives share an interface when only the values differ", () => {
+  const grammar = load("grammar Shapes\nroot R\nrule R = { @x \"a\" value:\"true\" | @x \"b\" value:\"false\" };\n");
+  const generated = generateTypes(grammar.file);
+  assert.deepEqual(generated.diagnostics, []);
+  assert.equal([...generated.text.matchAll(/export interface RXNode \{/g)].length, 1);
+  assert.match(generated.text, /readonly value: Text;/);
+});
+
+test("differing tagged field shapes are suffixed deterministically with a warning", () => {
+  const grammar = load("grammar Shapes\nroot R\nrule R = { @x \"a\" value:word | @x \"b\" other:word };\n");
+  const generated = generateTypes(grammar.file);
+  assert.match(generated.text, /export interface RXNode \{/);
+  assert.match(generated.text, /export interface RXNode2 \{/);
+  assert.equal(generated.diagnostics.some((entry) => entry.severity === "warning" && /RXNode2/.test(entry.message)), true);
+});
+
 test("the checked-in calc.ast.ts is current", () => {
   const committed = readFileSync(new URL("../examples/calc/calc.ast.ts", import.meta.url), "utf8");
   assert.equal(committed, calcTypes.text);

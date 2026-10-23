@@ -1,0 +1,84 @@
+grammar Schema
+
+skip /\s+/
+skip /\/\/[^\n]*/
+
+word /[A-Za-z_][A-Za-z0-9_]*/
+token Number /\d+/
+token String /"([^"\\\n]|\\.)*"/
+
+root File
+
+rule File = {
+  @schema "schema" name:Name declarations:Decl*
+};
+
+rule Decl = {
+  | Enum
+  | Model
+  | Query
+};
+
+rule Enum = {
+  @enum "enum" name:Name "{" members:Name* "}"
+};
+
+rule Model = {
+  @model "model" name:Name "{" fields:Field* "}"
+};
+
+rule Field = {
+  @field name:Name ":" type:TypeRef attributes:Attribute*
+};
+
+rule TypeRef = {
+  | @list type:Base "[" "]"
+  | @optional type:Base "?"
+  | Base
+};
+
+rule Base = {
+  @name name:Name
+};
+
+rule Attribute = {
+  @attribute "@" name:Name
+};
+
+rule Query = {
+  @query "query" name:Name "(" params:sep(Param, ",") ")" ":" result:TypeRef "=" source:Name stages:Stage* ";"
+};
+
+rule Param = {
+  @param name:Name ":" type:TypeRef
+};
+
+rule Stage = {
+  | @where "|>" "where" ~ field:Name "==" value:Value
+  | @order "|>" "orderBy" ~ field:Name direction:Direction?
+  | @limit "|>" "limit" ~ value:Value
+  | @terminal "|>" terminal:Terminal
+};
+
+rule Value = {
+  | @paramRef value:Name
+  | @literal value:Literal
+};
+
+rule Literal = {
+  | @number value:$Number
+  | @string value:$String
+};
+
+rule Direction = {
+  | @asc "asc"
+  | @desc "desc"
+};
+
+rule Terminal = {
+  | @first "first"
+  | @all "all"
+  | @count "count"
+};
+
+rule Name = { word };

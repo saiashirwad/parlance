@@ -144,3 +144,48 @@ test("tsgo hovers and navigates from TypeScript into a calc file", async () => {
     client.kill();
   }
 });
+
+test("tsgo hovers and navigates from TypeScript into a schema file", async () => {
+  const consumer = join(root, "examples/typescript/schema.ts");
+  const source = readFileSync(consumer, "utf8");
+  const guestUri = pathToFileURL(join(root, "examples/schema/blog.schema")).href;
+  const client = new Client(
+    process.execPath,
+    [join(root, "node_modules/typescript/bin/tsc"), "--lsp", "--stdio"],
+  );
+  try {
+    await client.request("initialize", {
+      processId: process.pid,
+      rootUri: pathToFileURL(root).href,
+      workspaceFolders: [{ uri: pathToFileURL(root).href, name: "parlance" }],
+      initializationOptions: { runExternalCode: true },
+      capabilities: {
+        general: { positionEncodings: ["utf-16"] },
+        textDocument: { hover: { contentFormat: ["markdown"] } },
+      },
+    });
+    client.notify("initialized", {});
+    const uri = pathToFileURL(consumer).href;
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "typescript", version: 1, text: source },
+    });
+
+    const at = position(source, "userByEmail");
+    const hover = await client.request("textDocument/hover", { textDocument: { uri }, position: at });
+    const hoverText = typeof hover.contents === "string" ? hover.contents : hover.contents.value;
+    assert.match(hoverText, /userByEmail/);
+    assert.match(hoverText, /User \| undefined/);
+
+    const definition = await client.request("textDocument/definition", { textDocument: { uri }, position: at });
+    const locations = Array.isArray(definition) ? definition : [definition];
+    const target = locations.find((entry) => entry.uri === guestUri || entry.targetUri === guestUri);
+    assert.ok(target, `definition should land in blog.schema: ${JSON.stringify(definition)}`);
+    const range = target.range ?? target.targetSelectionRange;
+    assert.ok(range.start.line > 0);
+
+    const diagnostics = await client.request("textDocument/diagnostic", { textDocument: { uri } });
+    assert.deepEqual(diagnostics.items, []);
+  } finally {
+    client.kill();
+  }
+});
