@@ -185,6 +185,8 @@ type Checker = {
   bind(binding: Binding): void;
   declare(name: string, span: Span, kind: DefinitionKind, type?: unknown): Binding;
   resolve(name: string, span: Span): Binding | undefined;
+  imported(name: string, span?: Span): Binding | undefined;
+  readonly dependencies: Dependencies<T>;
   typed(span: Span, type: unknown): void;
 
   check<T>(at: Span | Node, body: () => T): T | undefined;  // abort+recover one unit
@@ -195,6 +197,7 @@ type Checker = {
 ```
 
 - `declare` records a definition; `resolve` records a reference when it finds a binding. LSP gets both without extra calls.
+- `imported` binds an exported name from the first dependency that provides it and keeps the defining `uri`; `dependencies` is the read-only view the module graph supplies. See [`05-modules.md`](05-modules.md).
 - `scope` isolates bindings. `bind` adds to the current scope. Declarations are hoisted explicitly by the language (call `declare` during a pre-pass, bind during elaboration).
 - `abort` records the diagnostic and throws `AbortCheck`; `check` catches it and returns `undefined`. This gives declaration-level recovery without a monad. `abort` is for "cannot continue this unit", not for ordinary type errors; ordinary errors call `error` and return a placeholder.
 - `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens.

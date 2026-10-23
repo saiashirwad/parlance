@@ -43,5 +43,5 @@ node src/lsp/cli.ts --config ./parlance.config.ts
 
 - The server writes framed JSON-RPC on stdout. Never print debug output to stdout; use stderr.
 - Completion is keywords + top-level definitions only; there is no local-scope filtering yet (issue #4).
-- Definition and references are single-file today; a cross-file result is issue #2.
+- Definition crosses documents through the module graph. References, workspace rename, and formatting remain single-file/open-gap items (issue #4).
 - The smoke driver kills its own child. Do not kill by process name.

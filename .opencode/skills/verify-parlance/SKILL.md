@@ -46,7 +46,9 @@ Individual paths, for narrowing a failure:
 pnpm typecheck
 pnpm test
 ./parlance check examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine
+./parlance check examples/schema/catalog.schema examples/calc/imports.calc
 node --import ./examples/register.ts examples/typescript/calc.ts
+node --import ./examples/register.ts examples/typescript/catalog.ts
 node --import ./examples/register.ts examples/typescript/schema.ts
 node --import ./examples/register.ts examples/typescript/machine.ts
 node --test tests/tsgo.test.ts

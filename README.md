@@ -15,6 +15,8 @@ pnpm install
 
 ./parlance check examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine
 
+./parlance check examples/schema/catalog.schema examples/calc/imports.calc
+
 node --import ./examples/register.ts examples/typescript/calc.ts
 
 pnpm check
@@ -58,15 +60,17 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/01-architecture.md`](docs/01-architecture.md): the pipeline from grammar to facts, projections, and hosts.
 - [`docs/02-grammar.md`](docs/02-grammar.md): the `.parl` language, expressions, static checks, recovery, and generated ASTs.
 - [`docs/04-authoring.md`](docs/04-authoring.md): a step-by-step guide to adding a language.
+- [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
 
-There is no `03-incremental.md` or `05-modules.md` yet.
+There is no `03-incremental.md` yet.
 
 ## Status
 
 Working:
 
 - `.parl` compilation with static checks, root-item recovery, and a self-hosted grammar.
-- Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, single-file rename).
+- Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, single-file rename, cross-file definition).
+- Cross-file imports through one `ModuleGraph`: schema and calc resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step.
 - Named targets with `parlance emit`.
@@ -75,10 +79,9 @@ Working:
 
 Not built:
 
-- Cross-file imports and a module graph.
 - Incremental checking.
 - Formatting.
-- Workspace symbols, multi-file rename, and cross-file definitions.
+- Workspace symbols, multi-file rename, and cross-file references.
 - Source maps for runtime stack traces.
 - Publishing. The package is private and has no 1.0 milestone.
 

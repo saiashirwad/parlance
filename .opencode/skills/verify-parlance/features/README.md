@@ -7,6 +7,7 @@ One file per user-facing capability. The map is the source of truth for what "wo
 | Grammar authoring and typed ASTs | `.parl` files, `parlance gen`, self-host | [grammar.md](grammar.md) |
 | Checking and diagnostics | `parlance check`, `analyze` | [checking.md](checking.md) |
 | TypeScript content mapper | tsgo, `.ts` importing `.calc`/`.schema`/`.machine` | [content-mapper.md](content-mapper.md) |
+| Cross-file imports | `ModuleGraph`, `import`/`use`, CLI/loader/mapper/LSP | [modules.md](modules.md) |
 | Node runtime | `registerLanguages`, guest imports | [node-runtime.md](node-runtime.md) |
 | Language server | `parlance lsp`, stdio JSON-RPC | [lsp.md](lsp.md) |
 | Emit targets | `parlance emit --target sql\|drizzle\|kysely` | [emit-targets.md](emit-targets.md) |

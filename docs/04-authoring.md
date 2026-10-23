@@ -353,6 +353,8 @@ export default { languages: [calc, machine, schema] };
 
 The config may default-export a `Language[]` or `{ languages }`. The CLI looks for `parlance.config.ts`, `.mts`, `.js`, or `.mjs` in the current directory, or takes `--config <path>`.
 
+A language can also resolve imports. Add `imports(file)` and `exports(module)` to the language value; the project's `ModuleGraph` resolves specifiers, analyzes dependencies first, and exposes exported bindings through `cx.imported` and `cx.dependencies`. The CLI, Node loader, content mapper, and LSP already read the graph, so no host code changes. [`docs/05-modules.md`](../docs/05-modules.md) is the design record.
+
 The commands:
 
 ```sh

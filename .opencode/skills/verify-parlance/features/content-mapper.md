@@ -23,6 +23,9 @@ node --test tests/tsgo.test.ts
 # Mapping oracle: every verbatim mapping slices the same guest text; ranges stay in bounds.
 node --test tests/ts-mappings.test.ts
 
+# The mapper resolves an imported dependency and emits the importer's surface.
+node --import ./examples/register.ts examples/typescript/catalog.ts
+
 # Inspect the mapped surface without a compiler.
 node -e '
 import("./examples/calc/calc.ts").then(async ({ calc }) => {
@@ -34,7 +37,7 @@ import("./examples/calc/calc.ts").then(async ({ calc }) => {
 });'
 ```
 
-End state: `pnpm typecheck` exits 0; the tsgo test reports two passing tests; the printed surface contains `export declare const` and `export default` with calc names.
+End state: `pnpm typecheck` exits 0; the tsgo test reports two passing tests; the catalog run prints `1 1 Tools`; the printed surface contains `export declare const` and `export default` with calc names.
 
 ## Gotchas
 
