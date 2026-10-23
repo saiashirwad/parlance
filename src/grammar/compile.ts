@@ -615,6 +615,39 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     }
   };
 
+  const hasPredicate = (expr: PExpr, seen: Set<number>): boolean => {
+    switch (expr.t) {
+      case "and":
+      case "not":
+        return true;
+      case "ref": {
+        if (seen.has(expr.rule)) return false;
+        seen.add(expr.rule);
+        const target = lowered[expr.rule];
+        return target ? hasPredicate(target, seen) : false;
+      }
+      case "seq":
+        return expr.items.some((item) => hasPredicate(item.expr, seen));
+      case "alt":
+        return expr.alts.some((alt) => hasPredicate(alt, seen));
+      case "star":
+      case "plus":
+      case "opt":
+        return hasPredicate(expr.e, seen);
+      case "sep":
+        return hasPredicate(expr.item, seen) || hasPredicate(expr.separator, seen);
+      case "precedence":
+        return hasPredicate(expr.atom, seen)
+          || expr.levels.some((level) => level.operators.some((operator) => hasPredicate(operator, seen)));
+      case "lit":
+      case "word":
+      case "token":
+      case "re":
+      case "cut":
+        return false;
+    }
+  };
+
   let recoverTarget: PExpr | null = null;
   let incremental: GrammarSpec["incremental"] = null;
   if (lowered[rootIndex]) {
@@ -629,7 +662,13 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
         recoverTarget = last;
         const label = sequence.items.find((item) => item.expr === last)?.label ?? null;
         const shape = sequence.tag !== null ? (label ? "field" as const : null) : sequence.captures === 1 ? "array" as const : null;
-        if (shape !== null) {
+        // A predicate inside an item can read tokens beyond that item. Reuse
+        // cannot track what it observed, so such grammars stay full-parse.
+        // Predicates in root syntax outside the repetition are also unsafe to
+        // reuse without reparsing the root.
+        const predicates = hasPredicate(last.e, new Set())
+          || sequence.items.some((item) => item.expr !== last && hasPredicate(item.expr, new Set()));
+        if (shape !== null && !predicates) {
           incremental = {
             item: last.e,
             shape,

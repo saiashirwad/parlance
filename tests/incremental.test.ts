@@ -419,6 +419,85 @@ rule Decl = { @item "item" name:word ";" };
   assert.equal(appended.ok, appendedFull.ok);
 });
 
+test("guarded array roots also reject edits outside the item repetition", () => {
+  const parsed = parseGrammar(String.raw`
+grammar WrappedArray
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+root File
+rule File = { "begin" Decl* "end" };
+rule Decl = { @item "item" name:word ";" };
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const wrapped = compileGrammar(parsed.file);
+  assert.equal(wrapped.valid, true, wrapped.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(wrapped.spec.incremental?.shape, "array");
+  assert.equal(wrapped.spec.incremental?.guarded, true);
+
+  const source = "begin item a; item b; item c; item d; end";
+  const next = source.slice(0, source.lastIndexOf("end"));
+  const edit = { start: source.lastIndexOf("end"), end: source.length, insert: "" };
+  const result = reparse(wrapped.spec, wrapped.parse(source), next, edit, { previousSource: source });
+  const full = wrapped.parse(next);
+  assert.equal(result.stats.fallback, true);
+  assert.deepEqual(result.value, full.value);
+  assert.deepEqual(result.diagnostics, full.diagnostics);
+  assert.equal(result.ok, full.ok);
+});
+
+test("predicates in an item disable incremental reuse", () => {
+  const parsed = parseGrammar(String.raw`
+grammar ParserLook
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+root File
+rule File = { @file items:Decl* };
+rule Decl = {
+  | @special &(word ";" word ";" word ";" word ";" "z" ";") value:word ";"
+  | @plain value:word ";"
+};
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const look = compileGrammar(parsed.file);
+  assert.equal(look.valid, true, look.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(look.spec.incremental, null);
+  const source = "a; b; c; d; z;";
+  const edit = { start: at(source, "z"), end: at(source, "z") + 1, insert: "y" };
+  const next = source.slice(0, edit.start) + "y" + source.slice(edit.end);
+  const result = reparse(look.spec, look.parse(source), next, edit, { previousSource: source });
+  const full = look.parse(next);
+  assert.equal(result.stats.fallback, true);
+  assert.deepEqual(result.value, full.value);
+  assert.deepEqual(result.diagnostics, full.diagnostics);
+});
+
+test("guarded footer tokenization is validated", () => {
+  const parsed = parseGrammar(String.raw`
+grammar FooterContext
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+token Footer /(?<=x; )end/
+root File
+rule File = { @file "begin" items:Decl* footer:$Footer };
+rule Decl = { @item "item" name:word ";" };
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const context = compileGrammar(parsed.file);
+  assert.equal(context.valid, true, context.diagnostics.map((entry) => entry.message).join("\n"));
+  const source = "begin item a; item b; item x; end";
+  const at = source.indexOf("item x") + "item ".length;
+  const edit = { start: at, end: at + 1, insert: "y" };
+  const next = source.slice(0, at) + "y" + source.slice(at + 1);
+  const result = reparse(context.spec, context.parse(source), next, edit, { previousSource: source });
+  const full = context.parse(next);
+  assert.equal(result.stats.fallback, true);
+  assert.deepEqual(result.value, full.value);
+  assert.deepEqual(result.diagnostics, full.diagnostics);
+});
+
 test("array-shaped roots splice items directly", () => {
   const source = "item a;\nitem b;\nitem c;\nitem d;\nitem e;\n";
   const start = at(source, "c;");

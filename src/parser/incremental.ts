@@ -295,15 +295,16 @@ export const reparse = <A>(
     if (expected !== source) return fallback();
   }
 
+  if (incremental.guarded) {
+    if (items.length === 0) return fallback();
+    const first = items[0]!.span.start;
+    const last = items[items.length - 1]!.span.end;
+    if (edit.start <= first || edit.start >= last || edit.end > last) return fallback();
+  }
+
   if (incremental.shape === "field") {
     const field = incremental.field;
     if (field === null) return fallback();
-    if (incremental.guarded) {
-      if (items.length === 0) return fallback();
-      const first = items[0]!.span.start;
-      const last = items[items.length - 1]!.span.end;
-      if (edit.start <= first || edit.start >= last || edit.end > last) return fallback();
-    }
     const root = previous.value as Record<string, unknown>;
     if (typeof root.kind !== "string" || !Array.isArray(root[field])) return fallback();
     for (const key of Object.keys(root)) {
@@ -385,9 +386,17 @@ export const reparse = <A>(
   const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
 
   // Reused suffix items are only sound when the tokens above them agree with
-  // the previous stream. A resync inside the suffix covers the rest of it;
-  // before that point the new tokens must match one by one.
-  if (end < count - 1) {
+  // the previous stream. A guarded root also has footer tokens outside the
+  // repetition; compare everything from the window end to EOF. For an
+  // unguarded root, a resync inside the suffix covers the rest of it.
+  if (incremental.guarded) {
+    const oldStop = stopTokenAt(previous.tokens, items[end]?.span.end ?? 0);
+    const length = tokens.length - stop;
+    if (length !== previous.tokens.length - oldStop) return fallback();
+    for (let index = 0; index < length; index++) {
+      if (!sameToken(tokens[stop + index]!, previous.tokens[oldStop + index]!, delta)) return fallback();
+    }
+  } else if (end < count - 1) {
     const oldStop = stopTokenAt(previous.tokens, items[end]!.span.end);
     if (resync < 0 || resync >= stop) {
       const newEnd = resync >= 0 ? Math.min(resync + 1, tokens.length) : tokens.length;

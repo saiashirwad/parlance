@@ -32,8 +32,9 @@ Tokens before the edit are not reused. A regex match can reach across the edit e
 Lexing from 0 is not enough by itself. The AST items before and after the window are reused, so their tokens must still be the same ones the item parser saw.
 
 - **Prefix.** For every item retained before the window, the new token stream is compared one-for-one with the previous stream. A token that changes class without changing text (a lookahead token, for example) forces a full parse. This was a real bug: `token Special /a(?=[\s\S]*z)/` on `a; b; c; d; z;`, changing `z` to `y`, leaves the text of the first `a` unchanged but turns it into a word.
-- **Suffix.** Items retained after the window are compared against the previous stream until the resync token. If lexing never resyncs, every suffix token is compared. A mismatch falls back.
-- **Root syntax.** A root may have uncaptured header or footer syntax outside the item repetition, such as `"begin" items:Decl* "end"`. `incremental.guarded` records that. When it is set, an edit at or outside the item range falls back, and the previous root span and captured extras bound the result. Without this, deleting the footer would be accepted by an item-only reparse while a full parse rejects the file.
+- **Suffix.** Items retained after the window are compared against the previous stream until the resync token. If lexing never resyncs, every suffix token is compared. A guarded root compares everything from the window end to EOF, so a footer token whose classification changes (for example through lookbehind) forces a fallback. A mismatch falls back.
+- **Root syntax.** A root may have uncaptured header or footer syntax outside the item repetition, such as `"begin" items:Decl* "end"`. `incremental.guarded` records that for both array-shaped and field-shaped roots. When it is set, an edit at or outside the item range falls back, and the previous root span and captured extras bound the result. Without this, deleting the footer would be accepted by an item-only reparse while a full parse rejects the file.
+- **Parser predicates.** A predicate inside an item (`&(...)` or `!(...)`, including through a referenced rule) can inspect tokens beyond that item. Token equality cannot prove what it observed, so such grammars disable incremental mode and reparse fully. The randomized oracle covers a predicate that inspects four later items.
 - **Custom word.** The non-ASCII custom-word path advances the lexer by the match length. Before the fix it did not advance, so a grammar with `word /[a-z]+/` looped forever.
 
 Lookbehind is the one regex feature that can read text before the resync boundary. When a token, skip, word, or inline regex contains `(?<=` or `(?<!`, `reusableTail` returns false and the run goes to end of file.
@@ -72,7 +73,7 @@ After, for the benchmark edit (a same-length replacement in the middle):
 | splice and diagnostics | 2.9 |
 | full parse, for comparison | 219 to 285 |
 
-Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 77 ms against 227 to 284 ms, or 25% to 34%; machine load moves both numbers, but the ratio stays well below half.
+Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 95 ms against 227 to 284 ms, or 25% to 38%; machine load and the added prefix/suffix guards move both numbers. The ratio stays well below half.
 
 The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
 
