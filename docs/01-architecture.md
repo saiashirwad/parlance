@@ -2,7 +2,7 @@
 
 ## One value, six derived artifacts
 
-```
+```text
                     ┌──────────────┐
  source text ──────►│   grammar    │──► tokens ───────────────► highlighting
                     │  (lossless)  │──► CST/AST ──────────────► selection, folding, symbols
@@ -46,7 +46,7 @@ Everything the project needs is read from that value:
 - `parlance lsp --config ./parlance.config.ts` serves every language.
 - `@parlance/ts-host` is one content mapper package for every project; the project supplies `options.config`.
 - `registerLanguages([calc])` installs Node loader hooks for every extension.
-- `analyze(calc, source, uri)` is the only entry point for editors and hosts.
+- `analyze(calc, source, uri)` is the entry point for editors and hosts. `analyzeParsed` takes a parse you already have, such as the LSP's incremental reparse.
 
 ## Stage 1: grammar
 
@@ -89,15 +89,18 @@ The compiler produces:
 
 ```ts
 type CompiledGrammar<Ast> = {
+  readonly name: string;
+  readonly valid: boolean;
+  readonly diagnostics: readonly Diagnostic[];
   parse(source: string, options?: ParseOptions): ParseResult<Ast>;
   lex(source: string): TokenList;
-  ast: AstSchema;          // used by codegen and editor features
-  incremental: boolean;    // root is a repetition of items
-  highlight: HighlightMap;
+  highlight(source: string): readonly Token[];
+  highlightTokens(tokens: readonly LexToken[], trivia: readonly Trivia[]): readonly Token[];
+  readonly spec: GrammarSpec;  // parser tables and the incremental item window
 };
 ```
 
-The grammar language is itself written in `.parl` and parsed by the compiled grammar (`tests/self-host.test.ts`). The bootstrap parser exists only to break the cycle; it is not part of the API.
+The grammar language is itself written in `.parl` and parsed by the compiled grammar (`tests/grammar.test.ts`). The bootstrap parser exists only to break the cycle; it is not part of the API.
 
 ### Terminals
 
@@ -164,7 +167,7 @@ When the root rule is a repetition of one item rule (`@file items:Decl*`), the c
 4. Parse only the new token range covering the window, using the same item loop and recovery as a full parse.
 5. Splice, then verify structural invariants. If invariants fail, or a reused item's text no longer matches, fall back to a full parse and say so in the stats.
 
-Soundness rests on four conditions the compiler enforces: the root has one item repetition, the item is productive, no parser state crosses an item boundary, and recovery is item-local. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead, and the tests include predicates at boundaries. Full-parse equality is the oracle for every randomized edit. `docs/03-incremental.md` records the algorithm, limits, and measurements.
+Soundness rests on four conditions the compiler enforces: the root has one item repetition, the item is productive, no parser state crosses an item boundary, and recovery is item-local. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead, and the tests include predicates at boundaries. Full-parse equality is the oracle for every randomized edit. The implementation is in `src/parser/incremental.ts`; `docs/03-incremental.md` will record the limits and measurements.
 
 ## Stage 2: checking
 
@@ -175,8 +178,8 @@ type Checker = {
   readonly uri: string;
   readonly source: string;
 
-  error(at: Span | Node, message: string, options?: DiagnosticOptions): void;
-  warn(at: Span | Node, message: string, options?: DiagnosticOptions): void;
+  error(message: string, at: Span | Node, options?: CheckOptions): void;
+  warn(message: string, at: Span | Node, options?: CheckOptions): void;
 
   scope<T>(body: () => T): T;
   bind(binding: Binding): void;
@@ -185,7 +188,7 @@ type Checker = {
   typed(span: Span, type: unknown): void;
 
   check<T>(at: Span | Node, body: () => T): T | undefined;  // abort+recover one unit
-  abort(at: Span | Node, message: string): never;
+  abort(message: string, at: Span | Node, options?: CheckOptions): never;
 
   readonly facts: Facts;
 };
@@ -193,8 +196,8 @@ type Checker = {
 
 - `declare` records a definition; `resolve` records a reference when it finds a binding. LSP gets both without extra calls.
 - `scope` isolates bindings. `bind` adds to the current scope. Declarations are hoisted explicitly by the language (call `declare` during a pre-pass, bind during elaboration).
-- `check` catches `AbortCheck`, records the diagnostic, and returns `undefined`. This gives declaration-level recovery without a monad. `abort` is for "cannot continue this unit", not for ordinary type errors; ordinary errors call `error` and return a placeholder.
-- `facts` is the editor contract: diagnostics, definitions, references, typed spans, document symbols.
+- `abort` records the diagnostic and throws `AbortCheck`; `check` catches it and returns `undefined`. This gives declaration-level recovery without a monad. `abort` is for "cannot continue this unit", not for ordinary type errors; ordinary errors call `error` and return a placeholder.
+- `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens.
 
 Bindings are opaque and language-defined:
 
@@ -254,19 +257,20 @@ A `TsDoc` is `{ text, mappings }`, exactly what the content mapper needs.
 runtimeModule({
   data: module,
   from: new URL("./runtime.ts", import.meta.url).href,
-  imports: ["createMachine"],
-  exports: [["start", "createMachine(machine)"]],
+  imports: ["create"],
+  factory: "create(data)",
+  exports: { start: "runtime.start" },
 });
 ```
 
-The loader registers every guest extension, reads the file, analyzes it, and returns the emitted module. Guest imports work because the emitted module imports the guest specifier and the loader handles it recursively. If analysis produced errors, loading throws a `SyntaxError` with rendered guest positions.
+The loader registers every guest extension, reads the file, analyzes it, and returns the emitted module. If a runtime module imports another guest file, the loader handles it recursively. If analysis produced any diagnostic, loading throws a `SyntaxError` with rendered guest positions.
 
 ### Targets
 
 A target is a function from checked IR to an artifact:
 
 ```ts
-type Artifact = { readonly text: string; readonly fileName?: string; readonly mappings?: readonly Mapping[] };
+type Artifact = { readonly text: string; readonly fileName?: string };
 type Target<Ir> = (module: Ir) => Artifact;
 ```
 
@@ -292,11 +296,11 @@ One package, `@parlance/ts-host`, for every project:
 
 ### Node loader
 
-`registerLanguages([calc, machine])` reads the extension registry, analyzes, checks diagnostics, and returns the runtime module. Diagnostics are rendered with line/column and context. Analysis caches by URL + mtime so repeated imports do not reparse.
+`registerLanguages([calc, machine])` reads the extension registry, analyzes, checks diagnostics, and returns the runtime module. Diagnostics are rendered with line/column and context. The loader analyzes each load; it does not cache.
 
 ### LSP
 
-`serve(language)` implements:
+`serve(languages)` implements:
 
 - incremental text sync
 - semantic tokens (lexer tokens refined by facts)
@@ -312,17 +316,17 @@ Features are derived. A language that wants a custom hover adds `describe(bindin
 
 ## Package layout
 
-```
+```text
 src/
   source.ts        Source, Span, Text, edits
   diagnostic.ts    Diagnostic, render, routing
-  language.ts      Language, defineLanguage, analyze
+  language.ts      Language, defineLanguage, analyze, analyzeParsed
   grammar/
-    model.ts       grammar AST, compiled grammar
+    ast.ts         grammar AST
     parse.ts       bootstrap parser for .parl
     compile.ts     lexer/parser compiler, static checks
     types.ts       AST type generation
-    self.parl      the grammar language in itself
+    grammar.parl   the grammar language in itself
   parser/
     lex.ts         token array, trivia
     parse.ts       token parser, recovery
@@ -340,7 +344,7 @@ src/
   lsp/
     server.ts      generic LSP
   runtime/
-    module.ts      interpreted-module helper
+    index.ts       interpreted-module helper
 ```
 
 Examples prove each layer:
