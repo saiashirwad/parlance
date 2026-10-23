@@ -138,11 +138,25 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
   let result: CalcExpr | null = null;
   let resultType: Type | null = null;
   const names = new Set<string>();
+  const importedFrom = new Map<string, string>();
   for (const dependency of cx.dependencies.all) {
     const bindings: { exported: string; binding: Binding<Type> }[] = [];
     for (const [name, exported] of dependency.exports) {
+      const previous = importedFrom.get(name);
+      if (previous !== undefined) {
+        if (previous !== dependency.specifier) {
+          cx.error(
+            `Import ${JSON.stringify(dependency.specifier)} also exports ${JSON.stringify(name)}, already imported from ${
+              JSON.stringify(previous)
+            }`,
+            dependency.span,
+          );
+        }
+        continue;
+      }
       const binding = cx.imported(name);
       if (!binding) continue;
+      importedFrom.set(name, dependency.specifier);
       names.add(name);
       bindings.push({ exported: name, binding });
     }

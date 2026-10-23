@@ -74,6 +74,11 @@ const steps: readonly Step[] = [
     expect: ["sai@example.com 1 1 0 1 1 1 0"],
   },
   {
+    name: "run imported schema through TypeScript",
+    command: ["node", "--import", "./examples/register.ts", "examples/typescript/catalog.ts"],
+    expect: ["1 1 Tools"],
+  },
+  {
     name: "run machine through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/machine.ts"],
     expect: ["Paid Checkout Paid pay 50"],

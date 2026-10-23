@@ -22,18 +22,29 @@ const importSpecifier = (literal: { readonly text: string; readonly span: Span }
 `specifier` is the text between the quotes. `span` is the offset range that diagnostics and
 navigation use. An importer resolves the specifier relative to its own document URI.
 
-The example grammars put an import in the root item repetition so incremental parsing still sees
-one item rule:
+The example grammars add an import to an existing root item rule, so the root stays a repetition and incremental parsing still works:
 
 ```parl
-# schema.parl
+# schema.parl: Import becomes a Decl alternative
+rule Import = { @import "import" specifier:$String ";" };
+
+# calc.parl: same shape with a different word
+rule Import = { @import "use" specifier:$String ";" };
+
+# machine.parl: Import becomes an Event alternative
+rule Import = { @import "import" specifier:$String ";" };
+```
+
+Guest files write ordinary imports:
+
+```
 schema Catalog
 import "./blog.schema";
+model Catalog { owner: User }
 
-# calc.parl
 use "./lib.calc";
+let total = base * 2;
 
-# machine.parl
 machine Order {
   import "./base.machine";
   event pay
@@ -79,9 +90,10 @@ class ModuleGraph {
 `memory://dir/a.schema`, and absolute paths all work. Paths passed to `analyze` are normalized to
 absolute file URLs before use.
 
-`Node` is `{ uri, language, source, analysis, exports, imports }`. Exported bindings carry the URI
+`ModuleNode` is `{ uri, language, source, analysis, exports, imports }`. Exported bindings carry the URI
 of the document that defined them. A dependency's checked IR is available to a language as
-`dependency.module`; schema uses it to merge imported models into one SQL artifact.
+`dependency.module`; schema uses it to merge imported models into one SQL artifact. `Dependency` also
+carries the import `span`, so a language can report ambiguity at the specifier.
 
 ### Order and caching
 

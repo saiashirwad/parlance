@@ -7,3 +7,8 @@ model Catalog {
   name: String
   owner: User
 }
+
+query catalogs(): Catalog[] =
+  Catalog |> orderBy name |> all;
+
+insert Catalog { name: $name, owner: $owner }

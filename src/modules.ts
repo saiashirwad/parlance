@@ -186,6 +186,7 @@ export class ModuleGraph {
         seen.add(entry.specifier);
         dependencies.push({
           specifier: entry.specifier,
+          span: entry.span,
           uri: target,
           exports: node.exports as ReadonlyMap<string, Binding>,
           module: node.analysis.ir,

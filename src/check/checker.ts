@@ -23,6 +23,8 @@ export const at = (value: Span | Spanned): Span => "start" in value ? value : va
 export type Dependency<Type = unknown> = {
   /** The specifier exactly as written in the importing file. */
   readonly specifier: string;
+  /** The specifier's span in the importing file. */
+  readonly span: Span;
   /** The resolved document URI. */
   readonly uri: string;
   /** Exported bindings, already carrying their defining `uri`. */

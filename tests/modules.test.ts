@@ -4,12 +4,13 @@ import test from "node:test";
 import { calc, type CalcModule } from "../examples/calc/calc.ts";
 import { schema, type SchemaModule } from "../examples/schema/schema.ts";
 import { ModuleGraph } from "../src/modules.ts";
+import type { AnyLanguage } from "../src/language.ts";
 
 const root = new URL("..", import.meta.url).pathname;
 
 const memory = (
   files: Readonly<Record<string, string>>,
-  languages = [schema],
+  languages: readonly AnyLanguage[] = [schema],
 ): ModuleGraph =>
   new ModuleGraph({
     languages,
@@ -101,6 +102,22 @@ test("calc resolves an imported value and emits a real module import", () => {
     new URL("../examples/calc/lib.calc", import.meta.url).href,
     new URL("../examples/calc/imports.calc", import.meta.url).href,
   ]);
+});
+
+test("two imports exporting the same name report at the second specifier", () => {
+  const files = {
+    "memory://dir/lib1.calc": "let base = 1;\n",
+    "memory://dir/lib2.calc": "let base = 2;\n",
+    "memory://dir/main.calc": 'use "./lib1.calc";\nuse "./lib2.calc";\nshow base;\n',
+  };
+  const graph = memory(files, [calc]);
+  const analysis = graph.analyze("memory://dir/main.calc");
+  const conflict = analysis.diagnostics.find((entry) => /also exports "base"/.test(entry.message));
+  assert.ok(conflict, analysis.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(analysis.source.slice(conflict.span.start, conflict.span.end), "./lib2.calc");
+  const runtime = calc.runtime!(analysis.ir as CalcModule);
+  assert.match(runtime, /from "\.\/lib1\.calc"/);
+  assert.doesNotMatch(runtime, /from "\.\/lib2\.calc"/);
 });
 
 test("the Node loader runs imported guest files", () => {
