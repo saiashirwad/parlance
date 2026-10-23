@@ -186,12 +186,13 @@ for (const declaration of file.declarations) {
 
 `cx.scope` is not recovery. Use it for parameters and locals. `examples/schema/schema.ts` opens a scope around each query so parameters and fields do not leak into the next query.
 
-Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, and `tokens`. The LSP reads composed facts, not your AST. Two optional fields improve hover:
+Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, and `tokens`. The LSP reads composed facts, not your AST. Optional fields improve hover and completion:
 
 - `show(type)` renders a checked type.
 - `describe(binding)` renders a definition, with `show` as the fallback.
+- `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. Items may set `insertText` when the displayed label should not be inserted verbatim.
 
-The type kit is optional. `parlance/types` exports `TypeStore`, a mutable store with `snapshot` and `rollback`, and `printType`. Calc uses it to infer `number` and `boolean`. Schema and machine use their own domain types.
+The type kit is optional. `parlance/types` exports `TypeStore`, a mutable store with `mark` and `restore`, and `printType`. Calc uses it to infer `number` and `boolean`. Schema and machine use their own domain types.
 
 Set `checkPartial: false` only when your checker cannot tolerate a tree with parse errors. The default is `true`, so editor facts survive while the user types.
 

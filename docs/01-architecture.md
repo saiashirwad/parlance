@@ -232,7 +232,7 @@ local id while keeping its defining URI and span, so definition can cross files.
 `parlance/types` is optional. It provides:
 
 - a structural `Type` union (unknown, primitive, literal, array, record, union, function, ref, variable)
-- a mutable `TypeStore` with `fresh`, `bind`, `unify`, `snapshot`, `rollback`
+- a mutable `TypeStore` with `fresh`, `bind`, `unify`, `mark`, `restore`
 - `printType(type): TsType`
 
 A language can use it, ignore it, or bring its own. Schema and machine do not use HM; calc uses the store to infer `number`/`boolean`. The core never imports it.
@@ -350,7 +350,7 @@ One package, `@parlance/ts-host`, for every project:
 - definition and references (from facts)
 - document symbols (from definitions)
 - folding ranges (matching bracket tokens)
-- completion (grammar keywords + top-level definitions; local-scope completion awaits recorded scope ranges)
+- completion (grammar keywords, check facts, and language-owned `completions`; an `@` context filters to attribute items)
 - cross-file definition, references, and rename through the module graph
 
 Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file references.

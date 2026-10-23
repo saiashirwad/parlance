@@ -239,6 +239,31 @@ test("mutation parameters do not leak into the module scope", () => {
   assert.deepEqual(parameter.span, { start: parameterUse, end: parameterUse + "Post".length });
 });
 
+test("type references ignore query parameter names", () => {
+  const program = `schema Types
+
+enum Kind { Sale Rent }
+
+model Item {
+  id: Int @primary
+  kind: Kind
+}
+
+query byKind(Kind: Int, k: Kind): Item[] =
+  Item |> where id == Kind |> all;
+`;
+  const analysis = analyze(schema, program, "memory://schema/type-scope");
+  assert.deepEqual(analysis.diagnostics, []);
+  const enumeration = analysis.facts.definitions.find((definition) =>
+    definition.name === "Kind" && definition.kind === "enum"
+  );
+  assert.ok(enumeration, "missing the Kind enum binding");
+  const at = program.indexOf("k: Kind") + "k: ".length;
+  const reference = analysis.facts.references.find((entry) => entry.span.start === at);
+  assert.ok(reference, "missing a reference on the parameter type");
+  assert.equal(reference.id, enumeration.id, "the parameter type resolved to the parameter called Kind");
+});
+
 test("accepted mutations mix literals, enum members, and bound parameters", () => {
   const program = `schema Accepted
 

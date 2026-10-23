@@ -89,7 +89,7 @@ These are single-machine medians from the scripts above, not repeated trials acr
 
 Verdict: **drop generators from the public checker API.** Use plain functions over an explicit `Checker` context: `cx.error`, `cx.declare`, `cx.resolve`, `cx.scope`, `cx.typed`. Depth is handled by normal recursion over syntax trees, with a parser nesting limit and a diagnostic instead of a stack overflow; the old stack-safety test was protecting a 30k-deep synthetic tree, not a real language. Hard failures use a private `AbortCheck` exception caught at declaration boundaries, not a monad.
 
-The rollback behavior is still needed for inference. It moves into the type store (`snapshot` / `rollback`), where it belongs, and is tested there.
+The rollback behavior is still needed for inference. It moves into the type store as `mark` / `restore`, where it belongs, and is tested there.
 
 ### 2. That parserator is the parsing foundation
 

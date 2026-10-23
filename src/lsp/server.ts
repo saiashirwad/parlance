@@ -29,7 +29,7 @@ import {
 import { diagnostic, site } from "../diagnostic.ts";
 import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
-import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
+import { analyze, extensionMap, type AnyLanguage, type CompletionKind } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
 import { reparse, type IncrementalStats } from "../parser/incremental.ts";
 import { encodeAnalysis, folding } from "./semantic.ts";
@@ -65,6 +65,26 @@ const symbolKind = (definition: Definition): SymbolKind => {
       return SymbolKind.Function;
     default:
       return SymbolKind.Variable;
+  }
+};
+
+const completionKind = (kind: CompletionKind | undefined): CompletionItemKind => {
+  switch (kind) {
+    case "type":
+      return CompletionItemKind.Class;
+    case "function":
+      return CompletionItemKind.Function;
+    case "property":
+      return CompletionItemKind.Property;
+    case "enumMember":
+      return CompletionItemKind.EnumMember;
+    case "variable":
+      return CompletionItemKind.Variable;
+    case "constant":
+      return CompletionItemKind.Constant;
+    case "keyword":
+    case undefined:
+      return CompletionItemKind.Keyword;
   }
 };
 
@@ -150,7 +170,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       referencesProvider: true,
       documentSymbolProvider: true,
       foldingRangeProvider: true,
-      completionProvider: { triggerCharacters: [] },
+      completionProvider: { triggerCharacters: ["@"] },
       renameProvider: true,
       semanticTokensProvider: {
         legend: { tokenTypes: [...tokenKinds], tokenModifiers: [] },
@@ -318,27 +338,51 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     return folding(analysis.lex, document, language.grammar.spec);
   });
 
-  connection.onCompletion(({ textDocument }) => {
+  connection.onCompletion(({ textDocument, position }) => {
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     const language = languageFor(textDocument.uri);
     if (!document || !analysis || !language) return [];
-    const keywords = [...language.grammar.spec.keywords].map((keyword) => ({
-      label: keyword,
-      kind: CompletionItemKind.Keyword,
-      detail: "keyword",
-    }));
-    const definitions = analysis.facts.definitions.map((definition) => ({
-      label: definition.name,
-      kind: definition.kind === "function" || definition.kind === "method" ? CompletionItemKind.Function : definition.kind === "type" ? CompletionItemKind.Interface : CompletionItemKind.Variable,
-      ...(definition.type === undefined || !language.show ? {} : { detail: language.show(definition.type) }),
-    }));
+    const items: {
+      label: string;
+      kind: CompletionItemKind;
+      detail?: string;
+      insertText?: string;
+      filterText?: string;
+    }[] = [];
+    for (const keyword of language.grammar.spec.keywords) {
+      items.push({ label: keyword, kind: CompletionItemKind.Keyword, detail: "keyword" });
+    }
+    for (const completion of language.completions ?? []) {
+      items.push({
+        label: completion.label,
+        kind: completionKind(completion.kind),
+        ...(completion.detail === undefined ? {} : { detail: completion.detail }),
+        ...(completion.insertText === undefined ? {} : { insertText: completion.insertText }),
+        ...(completion.filterText === undefined ? {} : { filterText: completion.filterText }),
+      });
+    }
+    for (const definition of analysis.facts.definitions) {
+      items.push({
+        label: definition.name,
+        kind: definition.kind === "function" || definition.kind === "method"
+          ? CompletionItemKind.Function
+          : definition.kind === "type"
+          ? CompletionItemKind.Interface
+          : CompletionItemKind.Variable,
+        ...(definition.type === undefined || !language.show ? {} : { detail: language.show(definition.type) }),
+      });
+    }
     const seen = new Set<string>();
-    return [...keywords, ...definitions].filter((item) => {
+    const unique = items.filter((item) => {
       if (seen.has(item.label)) return false;
       seen.add(item.label);
       return true;
     });
+    const offset = document.offsetAt(position);
+    const linePrefix = document.getText().slice(Math.max(0, offset - 64), offset);
+    if (/@[A-Za-z0-9_]*$/.test(linePrefix)) return unique.filter((item) => item.label.startsWith("@"));
+    return unique;
   });
 
   connection.onRenameRequest(({ textDocument, position, newName }) => {

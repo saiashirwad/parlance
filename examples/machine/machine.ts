@@ -14,9 +14,10 @@ if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message)
 const grammar = compileGrammar<File>(parsed.file, "machine.parl");
 if (!grammar.valid) throw new Error(grammar.diagnostics.map((entry) => entry.message).join("\n"));
 
-const scalars = new Set(["Int", "String", "Bool", "DateTime"]);
+const scalarList = ["Int", "String", "Bool", "DateTime"] as const;
+const scalars = new Set<string>(scalarList);
 
-type Scalar = "Int" | "String" | "Bool" | "DateTime";
+type Scalar = (typeof scalarList)[number];
 
 type Checked =
   | { readonly kind: "machine"; readonly name: string }
@@ -296,5 +297,6 @@ export const machine = defineLanguage<File, MachineModule, Checked>({
   typescript: types,
   runtime,
   show: display,
+  completions: scalarList.map((label) => ({ label, kind: "type" as const, detail: "scalar" })),
   describe: (binding) => binding.type ? display(binding.type) : undefined,
 });

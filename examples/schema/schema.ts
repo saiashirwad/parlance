@@ -39,9 +39,12 @@ const reserved = new Set(
     + "yield let static implements interface package private protected public await Database open sql close").split(" "),
 );
 
-const scalarNames = new Set(["Int", "String", "Bool", "DateTime"]);
+const scalarList = ["Int", "String", "Bool", "DateTime"] as const;
+const scalarNames = new Set<string>(scalarList);
+const attributeList = ["primary", "auto", "unique", "default"] as const;
+const attributeNames = new Set<string>(attributeList);
 
-type Scalar = "Int" | "String" | "Bool" | "DateTime";
+type Scalar = (typeof scalarList)[number];
 
 type SchemaType =
   | { readonly kind: "scalar"; readonly name: Scalar }
@@ -181,15 +184,21 @@ const resolveBase = (
   enums: ReadonlyMap<string, Enum>,
   models: ReadonlyMap<string, Model>,
   imported: ReadonlyMap<string, SchemaType>,
+  bindings: ReadonlyMap<string, Binding<Checked>>,
   cx: Checker<Checked>,
 ): SchemaType | undefined => {
   const name = base.name.text;
   if (scalarNames.has(name)) return { kind: "scalar", name: name as Scalar };
+  const referenced = (type: SchemaType): SchemaType => {
+    const binding = bindings.get(name);
+    if (binding) cx.reference(binding, base.name);
+    return type;
+  };
   const enumeration = enums.get(name);
   if (enumeration) {
-    return { kind: "enum", name, members: enumeration.members.map((member) => member.text) };
+    return referenced({ kind: "enum", name, members: enumeration.members.map((member) => member.text) });
   }
-  if (models.has(name)) return { kind: "model", name };
+  if (models.has(name)) return referenced({ kind: "model", name });
   const foreign = imported.get(name);
   if (foreign) {
     cx.imported(name, base.name);
@@ -444,7 +453,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         cx.error("Fields cannot have list types", field.type);
         continue;
       }
-      const type = resolveBase(resolved.base, enums, models, importedTypes, cx);
+      const type = resolveBase(resolved.base, enums, models, importedTypes, bindings, cx);
       if (!type) continue;
       const attributes = new Map<string, Attribute>();
       for (const attribute of field.attributes) {
@@ -455,7 +464,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         attributes.set(attribute.name.text, attribute);
       }
       for (const [name, attribute] of attributes) {
-        if (!["primary", "auto", "unique", "default"].includes(name)) {
+        if (!attributeNames.has(name)) {
           cx.error(`Unknown attribute @${name}`, attribute.name);
           continue;
         }
@@ -572,7 +581,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
         cx.error("Query parameters cannot be lists", param.type);
         return undefined;
       }
-      const type = resolveBase(resolved.base, enums, models, importedTypes, cx);
+      const type = resolveBase(resolved.base, enums, models, importedTypes, bindings, cx);
       if (!type) return undefined;
       const paramBinding = cx.declare(param.name.text, param.name.span, "parameter", type, { detail: "parameter" });
       cx.typed(param.name, type);
@@ -705,7 +714,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     }
 
     const declared = refValue(declaration.result);
-    const declaredBase = resolveBase(declared.base, enums, models, importedTypes, cx);
+    const declaredBase = resolveBase(declared.base, enums, models, importedTypes, bindings, cx);
     const computed: ResultIR = terminal === "count"
       ? {
         type: { kind: "scalar", name: "Int" },
@@ -1410,6 +1419,19 @@ export const schema = defineLanguage<File, SchemaModule, Checked>({
   typescript: types,
   runtime,
   show: (type) => type.kind === "query" || type.kind === "mutation" ? signatureText(type) : display(type),
+  completions: [
+    ...attributeList.map((label) => ({
+      label: `@${label}`,
+      kind: "keyword" as const,
+      detail: "attribute",
+      insertText: label,
+      filterText: label,
+    })),
+    ...scalarList.map((label) => ({ label, kind: "type" as const, detail: "scalar" })),
+    { label: "now", kind: "constant", detail: "DateTime default" },
+    { label: "true", kind: "constant", detail: "Bool literal" },
+    { label: "false", kind: "constant", detail: "Bool literal" },
+  ],
   describe: (binding) => {
     if (binding.type?.kind === "query" || binding.type?.kind === "mutation") return signatureText(binding.type);
     if (binding.type && binding.detail) return `${binding.detail}.${binding.name}: ${display(binding.type)}`;

@@ -28,6 +28,24 @@ export type Artifact = {
   readonly fileName?: string;
 };
 
+export type CompletionKind =
+  | "keyword"
+  | "type"
+  | "variable"
+  | "function"
+  | "property"
+  | "enumMember"
+  | "constant";
+
+/** A language-owned completion item, for words the grammar does not lex as keywords. */
+export type Completion = {
+  readonly label: string;
+  readonly kind?: CompletionKind;
+  readonly detail?: string;
+  readonly insertText?: string;
+  readonly filterText?: string;
+};
+
 export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly name: string;
   readonly extensions: readonly `.${string}`[];
@@ -46,6 +64,8 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly targets?: Readonly<Record<string, (module: Ir) => Artifact>>;
   /** Hover rendering for a type. */
   readonly show?: (type: Type) => string;
+  /** Extra completion items beyond grammar keywords and check facts. */
+  readonly completions?: readonly Completion[];
   /** Optional hover text for a definition, before falling back to `show(type)`. */
   readonly describe?: (binding: Binding<Type>) => string | undefined;
   /** Check a tree that has parse errors. Defaults to true so editor facts survive typing. */

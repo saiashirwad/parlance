@@ -229,6 +229,83 @@ test("the LSP resolves a definition across imported files", async () => {
   }
 });
 
+test("the LSP completes schema attributes and scalar types", async () => {
+  const schemaUri = pathToFileURL("/virtual/completion.schema").href;
+  const source = "schema Shop\nmodel Item {\n  id: Int @primary\n  name: String\n}\n";
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const published = await client.open(schemaUri, source);
+    assert.deepEqual(published.params.diagnostics, []);
+
+    const completion = await client.request("textDocument/completion", {
+      textDocument: { uri: schemaUri },
+      position: { line: 0, character: 0 },
+    });
+    const labels = completion.result.map((item: Message) => item.label);
+    for (const label of ["@primary", "@auto", "@unique", "@default", "Int", "String", "Bool", "DateTime", "Item", "id"]) {
+      assert.ok(labels.includes(label), `missing completion ${label}: ${JSON.stringify(labels)}`);
+    }
+    const primary = completion.result.find((item: Message) => item.label === "@primary");
+    assert.equal(primary.insertText, "primary", "attribute insertion should not duplicate the @");
+
+    const attributeLine = source.split("\n")[2]!;
+    const attribute = await client.request("textDocument/completion", {
+      textDocument: { uri: schemaUri },
+      position: { line: 2, character: attributeLine.indexOf("@") + 1 },
+    });
+    const attributeLabels = attribute.result.map((item: Message) => item.label);
+    assert.deepEqual(attributeLabels.sort(), ["@auto", "@default", "@primary", "@unique"]);
+  } finally {
+    client.close();
+  }
+});
+
+test("the LSP resolves local type names in fields and query results", async () => {
+  const schemaUri = pathToFileURL("/virtual/local-types.schema").href;
+  const source = [
+    "schema Shop",
+    "enum Kind { Sale Rent }",
+    "model Item {",
+    "  id: Int @primary",
+    "  kind: Kind",
+    "}",
+    "query items(): Item[] =",
+    "  Item |> all;",
+    "",
+  ].join("\n");
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const published = await client.open(schemaUri, source);
+    assert.deepEqual(published.params.diagnostics, []);
+
+    const fieldType = await client.request("textDocument/definition", {
+      textDocument: { uri: schemaUri },
+      position: { line: 4, character: source.split("\n")[4]!.indexOf("Kind") + 1 },
+    });
+    assert.equal(fieldType.result.range.start.line, 1, "field type did not resolve to the enum");
+
+    const resultType = await client.request("textDocument/definition", {
+      textDocument: { uri: schemaUri },
+      position: { line: 6, character: source.split("\n")[6]!.indexOf("Item") + 1 },
+    });
+    assert.equal(resultType.result.range.start.line, 2, "query result type did not resolve to the model");
+
+    const references = await client.request("textDocument/references", {
+      textDocument: { uri: schemaUri },
+      position: { line: 2, character: source.split("\n")[2]!.indexOf("Item") + 1 },
+      context: { includeDeclaration: true },
+    });
+    const lines = references.result.map((entry: Message) => entry.range.start.line).sort((a: number, b: number) => a - b);
+    assert.deepEqual(lines, [2, 6, 7], "model references missed the query result or source");
+  } finally {
+    client.close();
+  }
+});
+
 test("closing an unsaved dependency refreshes importers from disk", async () => {
   const directory = mkdtempSync(join(tmpdir(), "parlance-lsp-close-"));
   const blogPath = join(directory, "blog.schema");
