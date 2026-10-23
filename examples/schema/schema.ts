@@ -248,7 +248,14 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
             members: enumeration.members.map((member) => member.name.text),
           },
         );
-        importedEnums.push({ ...enumeration, binding });
+        importedEnums.push({
+          ...enumeration,
+          members: enumeration.members.map((member) => ({
+            ...member,
+            binding: cx.alias(member.binding, dependency.uri),
+          })),
+          binding,
+        });
       }
     }
     for (const model of module.models) {
@@ -259,7 +266,14 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
           model.name.text,
           type && type.kind === "model" ? type : { kind: "model", name: model.name.text },
         );
-        importedModels.push({ ...model, binding });
+        const fields = model.fields.map((field) => ({
+          ...field,
+          binding: cx.alias(field.binding, dependency.uri),
+        }));
+        const primary = model.primary === null
+          ? null
+          : fields.find((field) => field.name.text === model.primary!.name.text) ?? null;
+        importedModels.push({ ...model, fields, primary, binding });
       }
     }
     for (const name of dependency.exports.keys()) {

@@ -4,6 +4,7 @@ import test from "node:test";
 import { calc, type CalcModule } from "../examples/calc/calc.ts";
 import { schema, type SchemaModule } from "../examples/schema/schema.ts";
 import { ModuleGraph } from "../src/modules.ts";
+import { definitionAt } from "../src/check/index.ts";
 import type { AnyLanguage } from "../src/language.ts";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -118,6 +119,30 @@ test("two imports exporting the same name report at the second specifier", () =>
   const runtime = calc.runtime!(analysis.ir as CalcModule);
   assert.match(runtime, /from "\.\/lib1\.calc"/);
   assert.doesNotMatch(runtime, /from "\.\/lib2\.calc"/);
+});
+
+test("imported fields and enum members navigate to their defining file", () => {
+  const blog = "schema Blog\nenum Role { Member Admin }\nmodel User {\n  id: Int @primary @auto\n  role: Role\n}\n";
+  const main = "schema Main\nimport \"./blog.schema\";\nquery admins(): User[] =\n  User |> where role == Admin |> all;\n";
+  const files = {
+    "memory://dir/blog.schema": blog,
+    "memory://dir/main.schema": main,
+  };
+  const analysis = memory(files).analyze("memory://dir/main.schema");
+  assert.deepEqual(analysis.diagnostics, []);
+
+  const fieldAt = main.indexOf("where role") + "where ".length;
+  const field = definitionAt(analysis.facts, fieldAt);
+  assert.equal(field?.name, "role");
+  assert.equal(field?.uri, "memory://dir/blog.schema");
+  assert.equal(blog.slice(field.span.start, field.span.end), "role");
+
+  const memberAt = main.indexOf("Admin");
+  const member = definitionAt(analysis.facts, memberAt);
+  assert.equal(member?.name, "Admin");
+  assert.equal(member?.kind, "enumMember");
+  assert.equal(member?.uri, "memory://dir/blog.schema");
+  assert.equal(blog.slice(member.span.start, member.span.end), "Admin");
 });
 
 test("the Node loader runs imported guest files", () => {

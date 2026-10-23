@@ -150,6 +150,23 @@ export class Checker<T = unknown> {
   }
 
   /**
+   * Registers a binding defined in another document as a local definition with a fresh id.
+   * References to the returned alias navigate to `uri`.
+   */
+  alias(binding: Binding<T>, uri: string, value?: Span | Spanned): Binding<T> {
+    const key = `${uri}:${binding.id}`;
+    let local = this.#imported.get(key);
+    if (!local) {
+      local = { ...binding, id: this.#nextBinding++, uri };
+      this.facts.definitions.push(local);
+      this.bind(local);
+      this.#imported.set(key, local);
+    }
+    if (value !== undefined) this.reference(local, value);
+    return local;
+  }
+
+  /**
    * Binds an exported name from the first dependency that provides it. The returned binding keeps
    * the defining document's `uri` and span but receives a local id so references stay unambiguous.
    */
@@ -157,16 +174,7 @@ export class Checker<T = unknown> {
     for (const dependency of this.dependencies.all) {
       const binding = dependency.exports.get(name);
       if (!binding) continue;
-      const key = `${binding.uri ?? dependency.uri}:${binding.id}`;
-      let local = this.#imported.get(key);
-      if (!local) {
-        local = { ...binding, id: this.#nextBinding++, uri: binding.uri ?? dependency.uri };
-        this.facts.definitions.push(local);
-        this.bind(local);
-        this.#imported.set(key, local);
-      }
-      if (value !== undefined) this.reference(local, value);
-      return local;
+      return this.alias(binding, binding.uri ?? dependency.uri, value);
     }
     return undefined;
   }

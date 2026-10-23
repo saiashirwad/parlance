@@ -133,6 +133,12 @@ class Checker<Type> {
   readonly dependencies: Dependencies<Type>;
 
   /**
+   * Registers a binding defined in another document as a local definition with a fresh id.
+   * References to the returned alias navigate to `uri`.
+   */
+  alias(binding: Binding<Type>, uri: string, at?: Span | Spanned): Binding<Type>;
+
+  /**
    * Binds a name from the first dependency that exports it. The alias keeps the defining
    * document's URI and span but gets a fresh local id, so references stay unambiguous.
    * Records a reference when `at` is supplied.
@@ -140,6 +146,8 @@ class Checker<Type> {
   imported(name: string, at?: Span | Spanned): Binding<Type> | undefined;
 }
 ```
+
+`imported` is shorthand for `alias` over a dependency export. Schema uses `alias` on imported model fields and enum members, so go-to-definition reaches the field or member, not only the type name.
 
 `analyze` and `analyzeParsed` take an optional `AnalysisContext` with `dependencies` and extra
 `diagnostics`. The graph passes unresolved-import and cycle diagnostics through this context, so
