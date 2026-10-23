@@ -264,6 +264,43 @@ rule Name = { word };
   check("lookahead: insert before a tag", source, { start: 0, end: 0, insert: "set z;\n" }, look.spec, (value) => look.parse(value));
 });
 
+test("root spans keep recovery regions and headers", () => {
+  const recovering = "let ;\nlet a = 1;\nshow a;\n";
+  const edited = check("leading recovery before the window", recovering, {
+    start: at(recovering, "a = 1"),
+    end: at(recovering, "a = 1") + 1,
+    insert: "b",
+  });
+  assert.equal(edited.result.stats.fallback, false);
+  assert.equal((edited.result.value as { readonly span: { readonly start: number; }; }).span.start, 0);
+
+  const schema = load("../examples/schema/schema.parl");
+  const source = [
+    "schema Bench",
+    "",
+    "model A {",
+    "  id: Int @primary",
+    "}",
+    "",
+    "model B {",
+    "  name: String @unique",
+    "}",
+    "",
+    "query byId(id: Int): A? = A |> where id == id |> first;",
+    "",
+  ].join("\n");
+  check("header grammar: rename a model", source, {
+    start: at(source, "model B") + "model ".length,
+    end: at(source, "model B") + "model ".length + 1,
+    insert: "C",
+  }, schema.spec, (value) => schema.parse(value));
+  check("header grammar: insert a field", source, {
+    start: at(source, "  id: Int @primary"),
+    end: at(source, "  id: Int @primary"),
+    insert: "  extra: Int\n",
+  }, schema.spec, (value) => schema.parse(value));
+});
+
 test("array-shaped roots splice items directly", () => {
   const source = "item a;\nitem b;\nitem c;\nitem d;\nitem e;\n";
   const start = at(source, "c;");
