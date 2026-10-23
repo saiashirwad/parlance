@@ -27,6 +27,15 @@ From that boundary the lexer sees identical text with no stored state, so the sh
 
 Tokens before the edit are not reused. A regex match can reach across the edit even when the grammar has no lookaround. Take `token T /a[^z]*z|a/` on `a; a; a; a;`. Every `a` is a one-character `T` token because no `z` follows. Change the last `a` to `z` and the first `a` becomes one token spanning the whole line. A restart near the edit would keep the stale prefix. Lexing from 0 catches it. The same holds for a greedy `.*` that can absorb a later terminator. A local restart measured 12 ms on the benchmark edit, but it was not sound for these grammars, so it is not in the code.
 
+### Reuse guards
+
+Lexing from 0 is not enough by itself. The AST items before and after the window are reused, so their tokens must still be the same ones the item parser saw.
+
+- **Prefix.** For every item retained before the window, the new token stream is compared one-for-one with the previous stream. A token that changes class without changing text (a lookahead token, for example) forces a full parse. This was a real bug: `token Special /a(?=[\s\S]*z)/` on `a; b; c; d; z;`, changing `z` to `y`, leaves the text of the first `a` unchanged but turns it into a word.
+- **Suffix.** Items retained after the window are compared against the previous stream until the resync token. If lexing never resyncs, every suffix token is compared. A mismatch falls back.
+- **Root syntax.** A root may have uncaptured header or footer syntax outside the item repetition, such as `"begin" items:Decl* "end"`. `incremental.guarded` records that. When it is set, an edit at or outside the item range falls back, and the previous root span and captured extras bound the result. Without this, deleting the footer would be accepted by an item-only reparse while a full parse rejects the file.
+- **Custom word.** The non-ASCII custom-word path advances the lexer by the match length. Before the fix it did not advance, so a grammar with `word /[a-z]+/` looped forever.
+
 Lookbehind is the one regex feature that can read text before the resync boundary. When a token, skip, word, or inline regex contains `(?<=` or `(?<!`, `reusableTail` returns false and the run goes to end of file.
 
 ## Span shifting

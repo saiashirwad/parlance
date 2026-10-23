@@ -207,7 +207,7 @@ const relex = (
   source: string,
   edit: Edit,
   delta: number,
-): TokenList => {
+): TokenList & { readonly resync: number } => {
   const old = previous.tokens;
   const resyncFrom = edit.start + edit.insert.length;
   let resync = -1;
@@ -250,8 +250,19 @@ const relex = (
       tailTrivia = tail;
     }
   }
-  return { tokens: run.tokens.concat(tailTokens), trivia: run.trivia.concat(tailTrivia) };
+  return {
+    tokens: run.tokens.concat(tailTokens),
+    trivia: run.trivia.concat(tailTrivia),
+    resync,
+  };
 };
+
+const sameToken = (left: LexToken, right: LexToken, delta: number): boolean =>
+  left.kind === right.kind
+  && left.text === right.text
+  && left.name === right.name
+  && left.span.start === right.span.start + delta
+  && left.span.end === right.span.end + delta;
 
 export const reparse = <A>(
   spec: GrammarSpec,
@@ -287,6 +298,12 @@ export const reparse = <A>(
   if (incremental.shape === "field") {
     const field = incremental.field;
     if (field === null) return fallback();
+    if (incremental.guarded) {
+      if (items.length === 0) return fallback();
+      const first = items[0]!.span.start;
+      const last = items[items.length - 1]!.span.end;
+      if (edit.start <= first || edit.start >= last || edit.end > last) return fallback();
+    }
     const root = previous.value as Record<string, unknown>;
     if (typeof root.kind !== "string" || !Array.isArray(root[field])) return fallback();
     for (const key of Object.keys(root)) {
@@ -311,11 +328,21 @@ export const reparse = <A>(
   const mapEnd = (offset: number): number =>
     offset < edit.start ? offset : offset >= edit.end ? offset + delta : edit.start + edit.insert.length;
 
-  const { tokens, trivia } = relex(spec, previous, source, edit, delta);
+  const { tokens, trivia, resync } = relex(spec, previous, source, edit, delta);
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
   let end = high;
-  const startToken = low <= 0 ? 0 : startTokenAt(tokens, mapOffset(items[low - 1]!.span.end));
+  const startToken = low <= 0
+    ? items[0] === undefined
+      ? 0
+      : stopTokenAt(tokens, mapOffset(items[0].span.start))
+    : startTokenAt(tokens, mapOffset(items[low - 1]!.span.end));
+  // Reused prefix items are only sound when their tokens are unchanged. A
+  // lookahead token before the edit can be reclassified by text after it.
+  const prefix = Math.min(startToken, previous.tokens.length, tokens.length);
+  for (let index = 0; index < prefix; index++) {
+    if (!sameToken(tokens[index]!, previous.tokens[index]!, 0)) return fallback();
+  }
   let range: ItemRange | null = null;
   let stop = 0;
   if (count === 0 || low < 0) {
@@ -326,7 +353,9 @@ export const reparse = <A>(
   } else {
     for (let attempt = 0; attempt < 3; attempt++) {
       stop = end === count - 1
-        ? tokens.length - 1
+        ? incremental.guarded
+          ? stopTokenAt(tokens, mapEnd(items[end]!.span.end))
+          : tokens.length - 1
         : stopTokenAt(tokens, mapEnd(items[end]!.span.end));
       const parsed = parseItemRange(spec, tokens, startToken, stop, parseOptions);
       if (parsed.next === stop) {
@@ -354,6 +383,21 @@ export const reparse = <A>(
 
   const repairedStart = tokens[startToken]!.span.start;
   const repairedEnd = stop > startToken ? tokens[stop - 1]!.span.end : repairedStart;
+
+  // Reused suffix items are only sound when the tokens above them agree with
+  // the previous stream. A resync inside the suffix covers the rest of it;
+  // before that point the new tokens must match one by one.
+  if (end < count - 1) {
+    const oldStop = stopTokenAt(previous.tokens, items[end]!.span.end);
+    if (resync < 0 || resync >= stop) {
+      const newEnd = resync >= 0 ? Math.min(resync + 1, tokens.length) : tokens.length;
+      const length = newEnd - stop;
+      if (length > previous.tokens.length - oldStop) return fallback();
+      for (let index = 0; index < length; index++) {
+        if (!sameToken(tokens[stop + index]!, previous.tokens[oldStop + index]!, delta)) return fallback();
+      }
+    }
+  }
 
   // Snapshot before `mutate` shifts the reused items in place.
   const lastOldEnd = items[items.length - 1]?.span.end;
@@ -404,7 +448,13 @@ export const reparse = <A>(
   } else {
     const field = incremental.field!;
     const root = previous.value as Record<string, unknown>;
-    const clone = { ...root, [field]: spliced };
+    const clone: Record<string, unknown> = {};
+    for (const key of Object.keys(root)) {
+      if (key === field || key === "span") continue;
+      const fieldValue = root[key];
+      clone[key] = key === "kind" || delta === 0 ? fieldValue : shift(fieldValue);
+    }
+    clone[field] = spliced;
     const oldRootSpan = root.span as Span | undefined;
     const firstOld = items[0]?.span;
     const rootStartsBeforeItems = oldRootSpan !== undefined && firstOld !== undefined && oldRootSpan.start < firstOld.start;
@@ -412,8 +462,11 @@ export const reparse = <A>(
     const first = spliced[0];
     const last = spliced[spliced.length - 1];
     // A window at token 0 reparsed every leading recovery token, so the root
-    // starts where the token stream does.
-    const start = startToken === 0
+    // starts where the token stream does. A guarded root keeps its header and
+    // footer, so the previous root span still bounds it.
+    const start = incremental.guarded && oldRootSpan
+      ? mapOffset(oldRootSpan.start)
+      : startToken === 0
       ? tokens[0]!.span.start
       : rootStartsBeforeItems && oldRootSpan
       ? mapOffset(oldRootSpan.start)
@@ -423,7 +476,9 @@ export const reparse = <A>(
     const lastEnd = last && isItem(last) ? last.span.end : start;
     // The root repetition spans the recovery tokens it skipped, not just its
     // items, so a repaired tail can reach past the last item.
-    const rootEnd = end === count - 1
+    const rootEnd = incremental.guarded && oldRootSpan
+      ? mapEnd(oldRootSpan.end)
+      : end === count - 1
       ? Math.max(lastEnd, repairedEnd)
       : rootEndsAfterItems && oldRootSpan
       ? mapEnd(oldRootSpan.end)

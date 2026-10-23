@@ -120,6 +120,8 @@ export type IncrementalSpec = {
   readonly field: string | null;
   /** First tokens of an item. */
   readonly sync: ReadonlySet<Key>;
+  /** Root syntax outside the repetition that is not captured, such as header/footer literals. */
+  readonly guarded: boolean;
 };
 
 export type LexToken = {

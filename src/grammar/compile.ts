@@ -635,6 +635,10 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
             shape,
             field: shape === "field" ? label : null,
             sync: syncOf(last.e, new Set()),
+            guarded: sequence.items.some((item) => {
+              if (item.expr === last) return false;
+              return item.label === null || item.label === "_";
+            }),
           };
         }
       }

@@ -344,6 +344,81 @@ test("root spans keep recovery regions and headers", () => {
   }, schema.spec, (value) => schema.parse(value));
 });
 
+test("distant lookahead tokenization invalidates a reused prefix", () => {
+  const parsed = parseGrammar(String.raw`
+grammar Distant
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+token Special /a(?=[\s\S]*z)/
+root File
+rule File = { @file items:Decl* };
+rule Decl = {
+  | @special value:$Special ";"
+  | @plain value:word ";"
+};
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const distant = compileGrammar(parsed.file);
+  assert.equal(distant.valid, true, distant.diagnostics.map((entry) => entry.message).join("\n"));
+  const source = "a; b; c; d; z;";
+  const checked = check("a token reclassified by later text", source, {
+    start: at(source, "z"),
+    end: at(source, "z") + 1,
+    insert: "y",
+  }, distant.spec, (value) => distant.parse(value));
+  assert.equal(checked.result.stats.fallback, true);
+  assert.equal((checked.result.value as { readonly items?: readonly unknown[]; }) !== null, true);
+});
+
+test("guarded roots fall back when the edit leaves the item repetition", () => {
+  const parsed = parseGrammar(String.raw`
+grammar Wrapped
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+root File
+rule File = { @file "begin" items:Decl* "end" };
+rule Decl = { @item "item" name:word ";" };
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const wrapped = compileGrammar(parsed.file);
+  assert.equal(wrapped.valid, true, wrapped.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(wrapped.spec.incremental?.guarded, true);
+
+  const source = "begin item a; item b; item c; item d; end";
+  const inside = check("guarded root, edit inside an item", source, {
+    start: at(source, "item a") + "item ".length,
+    end: at(source, "item a") + "item ".length + 1,
+    insert: "x",
+  }, wrapped.spec, (value) => wrapped.parse(value));
+  assert.equal(inside.result.stats.fallback, false);
+  assert.equal((inside.result.value as { readonly span: { readonly start: number; readonly end: number; }; }).span.start, 0);
+  assert.equal((inside.result.value as { readonly span: { readonly start: number; readonly end: number; }; }).span.end, source.length);
+
+  const removedSource = source.slice(0, source.lastIndexOf("end"));
+  const removedEdit = { start: source.lastIndexOf("end"), end: source.length, insert: "" };
+  const removed = reparse(wrapped.spec, wrapped.parse(source), removedSource, removedEdit, {
+    previousSource: source,
+  });
+  const removedFull = wrapped.parse(removedSource);
+  assert.equal(removed.stats.fallback, true);
+  assert.deepEqual(removed.value, removedFull.value);
+  assert.deepEqual(removed.diagnostics, removedFull.diagnostics);
+  assert.equal(removed.ok, removedFull.ok);
+
+  const appendedSource = `${source}\nitem e;`;
+  const appendedEdit = { start: source.length, end: source.length, insert: "\nitem e;" };
+  const appended = reparse(wrapped.spec, wrapped.parse(source), appendedSource, appendedEdit, {
+    previousSource: source,
+  });
+  const appendedFull = wrapped.parse(appendedSource);
+  assert.equal(appended.stats.fallback, true);
+  assert.deepEqual(appended.value, appendedFull.value);
+  assert.deepEqual(appended.diagnostics, appendedFull.diagnostics);
+  assert.equal(appended.ok, appendedFull.ok);
+});
+
 test("array-shaped roots splice items directly", () => {
   const source = "item a;\nitem b;\nitem c;\nitem d;\nitem e;\n";
   const start = at(source, "c;");

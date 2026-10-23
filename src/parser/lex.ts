@@ -125,6 +125,7 @@ export const lexFrom = (
         }
       } else {
         word = anchored(spec.word, source, offset);
+        if (word !== undefined) offset += word.length;
       }
       if (word !== undefined) {
         token = {

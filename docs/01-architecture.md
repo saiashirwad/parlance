@@ -167,7 +167,7 @@ When the root rule is a repetition of one item rule (`@file items:Decl*`), the c
 4. Parse only the new token range covering the window, using the same item loop and recovery as a full parse.
 5. Splice, then verify structural invariants. If invariants fail, fall back to a full parse and say so in the stats.
 
-Soundness rests on the root shape, a stateless lexer, and the resync guard: from the matched boundary the remaining source is byte-identical to the old source shifted by the delta, and the first reused token's left context has been checked. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead. Full-parse equality is the oracle for every randomized edit. [`03-incremental.md`](03-incremental.md) records the algorithm, limits, and measurements.
+Soundness rests on the root shape, a stateless lexer, the resync guard, and token checks on both reused sides: from the matched boundary the remaining source is byte-identical to the old source shifted by the delta; prefix tokens are compared one-for-one; suffix tokens are compared until the resync point. A root with uncaptured header/footer syntax is `guarded`: an edit outside the item range falls back. Lookahead beyond one item is the remaining gap; the window margin covers bounded lookahead. Full-parse equality is the oracle for every randomized edit. [`03-incremental.md`](03-incremental.md) records the algorithm, limits, and measurements.
 
 ## Stage 2: checking
 
