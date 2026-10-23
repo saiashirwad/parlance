@@ -298,7 +298,7 @@ class Machine {
         first = false;
         continue;
       }
-      if (reply.committed) return reply;
+      if (reply.committed && !expr.recover) return reply;
       if (!expr.recover) {
         if (first && expr.t === "plus") return reply;
         break;

@@ -8,13 +8,17 @@ import { parseGrammar } from "../src/grammar/parse.ts";
 const grammarSource = readFileSync(new URL("../src/grammar/grammar.parl", import.meta.url), "utf8");
 const calcSource = readFileSync(new URL("../examples/calc/calc.parl", import.meta.url), "utf8");
 
-const load = (source: string) => {
+const compile = (source: string) => {
   const parsed = parseGrammar(source);
   assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
   if (!parsed.ok) throw new Error("unreachable");
-  const compiled = compileGrammar(parsed.file);
-  assert.equal(compiled.valid, true, compiled.diagnostics.map((entry) => entry.message).join("\n"));
-  return { parsed: parsed.file, compiled };
+  return { parsed: parsed.file, compiled: compileGrammar(parsed.file) };
+};
+
+const load = (source: string) => {
+  const value = compile(source);
+  assert.equal(value.compiled.valid, true, value.compiled.diagnostics.map((entry) => entry.message).join("\n"));
+  return value;
 };
 
 test("the grammar language parses itself with a compiled parser", () => {
@@ -82,21 +86,21 @@ test("recovery keeps declarations after a malformed one", () => {
 });
 
 test("grammar checks report left recursion, nullable loops, and unused rules", () => {
-  const left = load(`
+  const left = compile(`
 grammar Bad
 root A
 rule A = { @a A "x" | @b "y" };
 `);
   assert.match(left.compiled.diagnostics.map((entry) => entry.message).join("\n"), /Left recursion/);
 
-  const loop = load(`
+  const loop = compile(`
 grammar Bad
 root A
-rule A = { "x"* };
+rule A = { ("x"?)* };
 `);
   assert.match(loop.compiled.diagnostics.map((entry) => entry.message).join("\n"), /match nothing/);
 
-  const unused = load(`
+  const unused = compile(`
 grammar Bad
 root A
 rule A = { "x" };

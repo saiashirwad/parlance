@@ -26,12 +26,12 @@ rule TokenDecl = { @token "token" ~ name:Name pattern:$Regex highlight:Highlight
 rule Highlight = { @highlight "@" name:word };
 rule Root = { @root "root" ~ rule:Name };
 rule Rule = {
-  | @rule "rule" ~ name:Name "=" ~ body:Body ";"
-  | @rule "rule" ~ name:Name "=" ~ "{" body:Alternatives "}" ";"
+  @rule "rule" name:Name "=" body:Body ";"
 };
 
 rule Body = {
   | Precedence
+  | @alternatives "{" alts:Alternatives "}"
   | @alternatives alts:Alternatives
 };
 
