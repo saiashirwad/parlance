@@ -27,8 +27,10 @@ import {
   typeAt,
 } from "../check/index.ts";
 import { diagnostic, site } from "../diagnostic.ts";
+import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
-import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
+import { analyze, analyzeParsed, extensionMap, type AnyLanguage } from "../language.ts";
+import { reparse, type IncrementalStats } from "../parser/incremental.ts";
 import type { LexToken } from "../parser/spec.ts";
 
 const kindIndex = new Map(tokenKinds.map((kind, index) => [kind, index]));
@@ -167,9 +169,21 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   const update = (document: TextDocument): void => {
     const language = languageFor(document.uri);
     if (!language) return;
+    const previous = analyses.get(document.uri);
+    const text = document.getText();
+    const edit = previous ? diff(previous.source, text) : null;
+    if (previous && edit === null) return;
     let analysis: ReturnType<typeof analyze>;
     try {
-      analysis = analyze(language, document.getText(), document.uri);
+      if (previous && edit) {
+        const parsed = previous.language.grammar.spec.incremental
+          ? reparse(previous.language.grammar.spec, previous.parse, text, edit, { previousSource: previous.source, mutate: true })
+          : previous.language.grammar.parse(text);
+        const stats = "stats" in parsed ? parsed.stats as IncrementalStats : null;
+        analysis = analyzeParsed(language, text, document.uri, parsed, stats);
+      } else {
+        analysis = analyze(language, text, document.uri);
+      }
     } catch (cause) {
       analysis = {
         ...analyze(language, "", document.uri),

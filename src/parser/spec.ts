@@ -81,6 +81,7 @@ export type TokenSpec = {
   readonly name: string;
   readonly source: string;
   readonly regex: RegExp;
+  readonly first: Uint8Array | null;
   readonly highlight: TokenKind | null;
   readonly span: Span;
 };
@@ -99,6 +100,11 @@ export type GrammarSpec = {
   readonly tokens: readonly TokenSpec[];
   readonly inline: readonly InlineSpec[];
   readonly symbols: readonly string[];
+  readonly symbolsByFirst: ReadonlyMap<string, readonly string[]>;
+  readonly fastWhitespace: boolean;
+  readonly fastLineComment: boolean;
+  readonly fastBlockComment: boolean;
+  readonly asciiWord: boolean;
   readonly keywords: ReadonlySet<string>;
   readonly rules: readonly ParseRule[];
   readonly root: number;
@@ -120,6 +126,7 @@ export type LexToken = {
   readonly kind: "word" | "symbol" | "token" | "regex" | "error" | "eof";
   readonly text: string;
   readonly span: Span;
+  readonly key: Key;
   readonly name?: string;
   readonly index?: number;
   readonly highlight: TokenKind | null;

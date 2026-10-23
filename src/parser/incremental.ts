@@ -16,6 +16,8 @@ export type IncrementalOptions = ParseOptions & {
   readonly verify?: boolean;
   /** The source `previous` was parsed from, used for the reuse soundness guard. */
   readonly previousSource?: string;
+  /** Shift reused ASTs in place. Only for callers that discard `previous` immediately. */
+  readonly mutate?: boolean;
 };
 
 export type IncrementalStats = {
@@ -169,12 +171,18 @@ export const reparse = <A>(
     const root = previous.value as Record<string, unknown>;
     if (typeof root.kind !== "string" || !Array.isArray(root[field])) return fallback();
     for (const key of Object.keys(root)) {
-      if (key !== "kind" && key !== "span" && key !== field) return fallback();
+      if (key === "kind" || key === "span" || key === field) continue;
+      const extra = root[key];
+      if (extra === null || typeof extra !== "object") continue;
+      const extraSpan = (extra as { readonly span?: Span; }).span;
+      if (!extraSpan) return fallback();
+      if (extraSpan.start < edit.end && edit.start < extraSpan.end) return fallback();
     }
     if (items.length > 0) {
       const rootSpan = root.span as Span | undefined;
-      if (!rootSpan || rootSpan.start !== items[0]!.span.start) return fallback();
-      if (rootSpan.end !== items[items.length - 1]!.span.end) return fallback();
+      if (!rootSpan || rootSpan.start > items[0]!.span.start || rootSpan.end < items[items.length - 1]!.span.end) {
+        return fallback();
+      }
     }
   }
 
@@ -185,6 +193,26 @@ export const reparse = <A>(
     offset < edit.start ? offset : offset >= edit.end ? offset + delta : edit.start + edit.insert.length;
 
   const lexed = lex(spec, source);
+  // Tokenization outside the edit must be unchanged. A broken quote or comment
+  // can merge tokens far past the edited item; comparing the reused token tail
+  // catches that before any AST is reused.
+  const tokensOutsideEdit = (): boolean => {
+    let next = 0;
+    for (const old of previous.tokens) {
+      if (old.kind === "eof") continue;
+      if (old.span.end > edit.start && old.span.start < edit.end) continue;
+      const expected = old.span.start >= edit.end ? old.span.start + delta : old.span.start;
+      while (next < lexed.tokens.length && lexed.tokens[next]!.span.start < expected) next++;
+      const token = lexed.tokens[next];
+      if (
+        !token || token.span.start !== expected || token.kind !== old.kind
+        || token.text !== old.text || token.name !== old.name
+      ) return false;
+      next++;
+    }
+    return true;
+  };
+  if (!tokensOutsideEdit()) return fallback();
   const tokens = lexed.tokens;
   const [low, high] = selectWindow(items, edit);
   const count = items.length;
@@ -229,11 +257,26 @@ export const reparse = <A>(
   const before = count === 0 || low < 0 ? [] : items.slice(0, low);
   const olds = count === 0 || low < 0 ? [] : items.slice(end + 1);
   const shift = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(shift);
+    if (Array.isArray(value)) {
+      if (options.mutate) {
+        for (const child of value) shift(child);
+        return value;
+      }
+      return value.map(shift);
+    }
     if (value === null || typeof value !== "object") return value;
     const record = value as Record<string, unknown>;
     if (typeof record.start === "number" && typeof record.end === "number") {
+      if (options.mutate) {
+        record.start = mapOffset(record.start);
+        record.end = mapOffset(record.end);
+        return record;
+      }
       return { ...record, start: mapOffset(record.start), end: mapOffset(record.end) };
+    }
+    if (options.mutate) {
+      for (const child of Object.values(record)) shift(child);
+      return record;
     }
     const clone: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(record)) clone[key] = shift(child);
@@ -268,11 +311,29 @@ export const reparse = <A>(
     const field = incremental.field!;
     const root = previous.value as Record<string, unknown>;
     const clone = { ...root, [field]: spliced };
-    const start = tokens[0]!.span.start;
+    const oldRootSpan = root.span as Span | undefined;
+    const extra = Object.keys(root)
+      .filter((key) => key !== "kind" && key !== "span" && key !== field)
+      .flatMap((key) => {
+        const span = (root[key] as { readonly span?: Span; } | null)?.span;
+        return span ? [span] : [];
+      });
+    const firstOld = items[0]?.span;
+    const lastOld = items[items.length - 1]?.span;
+    const hasHeader = firstOld !== undefined && extra.some((span) => span.start < firstOld.start);
+    const hasFooter = lastOld !== undefined && extra.some((span) => span.end > lastOld.end);
+    const first = spliced[0];
     const last = spliced[spliced.length - 1];
-    const rootEnd = (count === 0 || low < 0 || end === count - 1) && range.next > 0
-      ? tokens[range.next - 1]!.span.end
-      : last && isItem(last) ? last.span.end : start;
+    const start = hasHeader && oldRootSpan
+      ? mapOffset(oldRootSpan.start)
+      : first && isItem(first)
+      ? first.span.start
+      : tokens[0]!.span.start;
+    const rootEnd = hasFooter && oldRootSpan
+      ? mapEnd(oldRootSpan.end)
+      : last && isItem(last)
+      ? last.span.end
+      : start;
     clone.span = { start, end: rootEnd };
     value = clone;
   }

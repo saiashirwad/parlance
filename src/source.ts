@@ -32,6 +32,19 @@ export const applyEdits = (source: string, edits: readonly Edit[]): string =>
     .sort((a, b) => b.start - a.start)
     .reduce((current, edit) => applyEdit(current, edit), source);
 
+/** The smallest single edit that turns `before` into `after`, or null when they are equal. */
+export const diff = (before: string, after: string): Edit | null => {
+  if (before === after) return null;
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start++;
+  let end = 0;
+  while (
+    end < before.length - start && end < after.length - start
+    && before[before.length - 1 - end] === after[after.length - 1 - end]
+  ) end++;
+  return { start, end: before.length - end, insert: after.slice(start, after.length - end) };
+};
+
 export type Position = { readonly line: number; readonly character: number };
 
 /** Line starts are UTF-16 offsets. `\r\n`, `\n`, and `\r` each end a line. */

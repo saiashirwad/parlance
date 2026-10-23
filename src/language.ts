@@ -1,6 +1,8 @@
 import { type Binding, Checker, type Facts, semanticTokens, type Token } from "./check/index.ts";
 import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
+import type { IncrementalStats } from "./parser/incremental.ts";
+import type { ParseResult } from "./parser/parse.ts";
 import type { LexToken, Trivia } from "./parser/spec.ts";
 import type { TsDoc } from "./ts/index.ts";
 
@@ -51,23 +53,26 @@ export type Analysis<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly diagnostics: readonly Diagnostic[];
   readonly facts: Facts<Type>;
   readonly valid: boolean;
+  readonly parse: ParseResult<Ast>;
+  readonly incremental: IncrementalStats | null;
 };
-
-const internal = (message: string): Diagnostic => ({
-  message,
-  severity: "error",
-  span: { start: 0, end: 0 },
-  code: "internal",
-});
 
 /** Parse, check, and collect every fact the editor and hosts need. Never throws on guest input. */
 export const analyze = <Ast, Ir, Type>(
   language: Language<Ast, Ir, Type>,
   source: string,
   uri = "memory://input",
+): Analysis<Ast, Ir, Type> => analyzeParsed(language, source, uri, language.grammar.parse(source));
+
+/** Analyze an already parsed file. The LSP uses this after an incremental reparse. */
+export const analyzeParsed = <Ast, Ir, Type>(
+  language: Language<Ast, Ir, Type>,
+  source: string,
+  uri: string,
+  parsed: ParseResult<Ast>,
+  incremental: IncrementalStats | null = null,
 ): Analysis<Ast, Ir, Type> => {
-  const parsed = language.grammar.parse(source);
-  const lexical = language.grammar.highlight(source);
+  const lexical = language.grammar.highlightTokens(parsed.tokens, parsed.trivia);
   const checker = new Checker<Type>(uri, source, lexical, parsed.diagnostics);
   let ir: Ir | null = null;
   if (parsed.value !== null && (parsed.ok || language.checkPartial !== false)) {
@@ -99,6 +104,8 @@ export const analyze = <Ast, Ir, Type>(
     diagnostics,
     facts,
     valid: diagnostics.every((entry) => entry.severity !== "error"),
+    parse: parsed,
+    incremental,
   };
 };
 

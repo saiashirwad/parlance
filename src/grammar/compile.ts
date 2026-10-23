@@ -13,6 +13,7 @@ import {
   type SeqItem,
   type TokenList,
   type TokenSpec,
+  type Trivia,
 } from "../parser/spec.ts";
 import { parseGrammar as parseGrammarSource } from "./parse.ts";
 import {
@@ -34,6 +35,7 @@ export type CompiledGrammar<A = unknown> = {
   parse(source: string, options?: ParseOptions): ParseResult<A>;
   lex(source: string): TokenList;
   highlight(source: string): readonly Token[];
+  highlightTokens(tokens: readonly LexToken[], trivia: readonly Trivia[]): readonly Token[];
 };
 
 type Context = {
@@ -109,6 +111,32 @@ const compilePattern = (
 
 const text = (value: Text): string => value.text;
 
+const bitmap = (characters: string): Uint8Array => {
+  const result = new Uint8Array(128);
+  for (const character of characters) result[character.charCodeAt(0)] = 1;
+  return result;
+};
+
+const firstChars = (source: string): Uint8Array | null => {
+  if (source.startsWith("\\d") || source.startsWith("[0-9") || source.startsWith("[\\d")) {
+    return bitmap("0123456789");
+  }
+  if (source.startsWith("\\w") || source.startsWith("[A-Za-z_") || source.startsWith("[a-zA-Z_")) {
+    return bitmap(
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_0123456789",
+    );
+  }
+  const first = source[0];
+  if (first === '"' || first === "'" || first === "\\") {
+    if (source.startsWith('\\"')) return bitmap('"');
+    if (source.startsWith("\\/")) return bitmap("/");
+    if (first === '"' || first === "'") return bitmap(first);
+  }
+  if (first === "/") return bitmap("/");
+  if (first !== undefined && /[A-Za-z0-9_+\-*/=<>!&|;:,.(){}[\]]/.test(first)) return bitmap(first);
+  return null;
+};
+
 const highlightOf = (name: string): TokenKind | undefined => {
   const direct = tokenKinds.find((kind) => kind === name);
   if (direct) return direct;
@@ -174,6 +202,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       name,
       source,
       regex,
+      first: firstChars(source),
       highlight: highlight ?? defaultHighlight(name),
       span: declaration.name.span,
     });
@@ -894,6 +923,15 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     return expr ? [{ name: text(rule.name), expr, span: rule.span }] : [];
   });
 
+  const symbols = [...context.symbols].sort((a, b) => b.length - a.length);
+  const symbolsByFirst = new Map<string, string[]>();
+  for (const symbol of symbols) {
+    const first = symbol[0]!;
+    const list = symbolsByFirst.get(first);
+    if (list) list.push(symbol);
+    else symbolsByFirst.set(first, [symbol]);
+  }
+  const skipSources = file.skips.map((skip) => decodePattern(skip.pattern.text));
   const spec: GrammarSpec = {
     name: text(file.name),
     skips,
@@ -901,7 +939,12 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     wordSource,
     tokens: [...context.tokens.values()],
     inline: context.inline,
-    symbols: [...context.symbols].sort((a, b) => b.length - a.length),
+    symbols,
+    symbolsByFirst,
+    fastWhitespace: skipSources.some((source) => source.startsWith("\\s") || source.startsWith("[\\s")),
+    fastLineComment: skipSources.some((source) => source.includes("//")),
+    fastBlockComment: skipSources.some((source) => source.includes("/*") && source.includes("*/")),
+    asciiWord: wordSource === "[A-Za-z_][A-Za-z0-9_]*",
     keywords: context.keywords,
     rules: ruleSpecs,
     root: rootIndex,
@@ -933,7 +976,9 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
       return parseSource<A>(spec, source, options);
     },
     lex: (source: string) => lexTokens(spec, source),
-    highlight: (source: string) => highlightOfSource(spec, source, sorted),
+    highlight: (source: string) => highlightOfSource(spec, source),
+    highlightTokens: (tokens: readonly LexToken[], trivia: readonly Trivia[]) =>
+      highlightOfTokens(spec, { tokens, trivia }),
   };
 };
 
@@ -964,9 +1009,11 @@ const inspectUnaryTags = (unary: Unary, visit: (alts: readonly Alternative[]) =>
   }
 };
 
-const highlightOfSource = (spec: GrammarSpec, source: string, diagnostics: readonly Diagnostic[]): readonly Token[] => {
-  void diagnostics;
-  const list = lexTokens(spec, source);
+const highlightOfSource = (spec: GrammarSpec, source: string): readonly Token[] =>
+  highlightOfTokens(spec, lexTokens(spec, source));
+
+const highlightOfTokens = (spec: GrammarSpec, list: TokenList): readonly Token[] => {
+  void spec;
   const tokens: Token[] = [];
   for (const trivia of list.trivia) {
     if (trivia.kind !== "comment") continue;

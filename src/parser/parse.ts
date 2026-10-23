@@ -21,28 +21,42 @@ type Reply =
 
 const FAIL: Reply = { ok: false, committed: false };
 
-const tokenKey = (token: LexToken): Key => {
-  switch (token.kind) {
-    case "word":
-      return `word:${token.text}`;
-    case "symbol":
-      return `symbol:${token.text}`;
-    case "token":
-      return `token:${token.name}`;
-    case "regex":
-      return `regex:${token.index ?? 0}`;
-    case "eof":
-      return "eof";
-    case "error":
-      return `symbol:${token.text}`;
+type OperatorEntry = { readonly level: PrecLevel; readonly operator: PExpr };
+type OperatorIndex = {
+  readonly prefix: ReadonlyMap<Key, readonly OperatorEntry[]>;
+  readonly infix: ReadonlyMap<Key, readonly OperatorEntry[]>;
+  readonly fallbackPrefix: readonly OperatorEntry[];
+  readonly fallbackInfix: readonly OperatorEntry[];
+};
+const operatorIndexes = new WeakMap<readonly PrecLevel[], OperatorIndex>();
+
+const indexOperators = (levels: readonly PrecLevel[]): OperatorIndex => {
+  const prefix = new Map<Key, OperatorEntry[]>();
+  const infix = new Map<Key, OperatorEntry[]>();
+  const fallbackPrefix: OperatorEntry[] = [];
+  const fallbackInfix: OperatorEntry[] = [];
+  for (const level of levels) {
+    const target = level.assoc === "prefix" ? prefix : infix;
+    const fallback = level.assoc === "prefix" ? fallbackPrefix : fallbackInfix;
+    for (const operator of level.operators) {
+      if (operator.first.size === 0) {
+        fallback.push({ level, operator });
+        continue;
+      }
+      for (const key of operator.first) {
+        const list = target.get(key);
+        if (list) list.push({ level, operator });
+        else target.set(key, [{ level, operator }]);
+      }
+    }
   }
+  return { prefix, infix, fallbackPrefix, fallbackInfix };
 };
 
-const matches = (first: ReadonlySet<Key>, token: LexToken): boolean => {
-  const key = tokenKey(token);
-  if (first.has(key)) return true;
-  return token.kind === "word" && first.has("word");
-};
+const tokenKey = (token: LexToken): Key => token.key;
+
+const matches = (first: ReadonlySet<Key>, token: LexToken): boolean =>
+  first.has(token.key) || (token.kind === "word" && first.has("word"));
 
 const describe = (key: Key, spec: GrammarSpec): string => {
   if (key === "word") return "a name";
@@ -71,6 +85,7 @@ class Machine {
   farthest = -1;
   expected = new Set<Key>();
   depth = 0;
+  speculative = 0;
 
   constructor(spec: GrammarSpec, tokens: readonly LexToken[], maxDepth: number) {
     this.spec = spec;
@@ -88,6 +103,7 @@ class Machine {
   }
 
   record(keys: Iterable<Key>, at: number): void {
+    if (this.speculative > 0) return;
     if (at > this.farthest) {
       this.farthest = at;
       this.expected = new Set(keys);
@@ -103,9 +119,11 @@ class Machine {
 
   probe(body: () => Reply): Reply {
     const farthest = this.farthest;
-    const expected = new Set(this.expected);
+    const expected = this.expected;
     const diagnostics = this.diagnostics.length;
+    this.speculative++;
     const reply = body();
+    this.speculative--;
     if (!reply.ok) {
       this.farthest = farthest;
       this.expected = expected;
@@ -167,7 +185,7 @@ class Machine {
     return cursor === start ? start + 1 : cursor;
   }
 
-  parseExpr(expr: PExpr, pos: number): Reply {
+  parseExpr(expr: PExpr, pos: number, capture = true): Reply {
     if (this.depth >= this.maxDepth) {
       const token = this.token(pos);
       this.diagnostics.push(error("Expression is nested too deeply", token.span, { code: "parse/depth" }));
@@ -180,24 +198,40 @@ class Machine {
           const token = this.token(pos);
           const kind = expr.word ? "word" : "symbol";
           if (token.kind === kind && token.text === expr.text) {
-            return { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 };
+            return {
+              ok: true,
+              value: capture ? { text: token.text, span: token.span } : null,
+              next: pos + 1,
+            };
           }
           return this.fail([expr.key], pos);
         }
         case "word": {
           const token = this.token(pos);
           if (token.kind !== "word") return this.fail(["word"], pos);
-          return { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 };
+          return {
+            ok: true,
+            value: capture ? { text: token.text, span: token.span } : null,
+            next: pos + 1,
+          };
         }
         case "token": {
           const token = this.token(pos);
           if (token.kind !== "token" || token.name !== expr.name) return this.fail([`token:${expr.name}`], pos);
-          return { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 };
+          return {
+            ok: true,
+            value: capture ? { text: token.text, span: token.span } : null,
+            next: pos + 1,
+          };
         }
         case "re": {
           const token = this.token(pos);
           if (token.kind !== "regex" || token.index !== expr.index) return this.fail([`regex:${expr.index}`], pos);
-          return { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 };
+          return {
+            ok: true,
+            value: capture ? { text: token.text, span: token.span } : null,
+            next: pos + 1,
+          };
         }
         case "ref":
           return this.parseExpr(this.spec.rules[expr.rule]!.expr, pos);
@@ -238,7 +272,7 @@ class Machine {
     let index = pos;
     let cut = false;
     for (const item of expr.items) {
-      const reply = this.parseExpr(item.expr, index);
+      const reply = this.parseExpr(item.expr, index, item.capture);
       if (!reply.ok) return reply.committed || cut ? { ok: false, committed: true } : reply;
       values.push(reply.value);
       index = reply.next;
@@ -266,18 +300,25 @@ class Machine {
 
   parseAlt(expr: Extract<PExpr, { readonly t: "alt"; }>, pos: number): Reply {
     const token = this.token(pos);
-    let candidates = expr.alts.filter((alt) => alt.nullable || matches(alt.first, token));
-    if (candidates.length === 0) {
-      if (token.kind === "error" || token.kind === "eof") candidates = [...expr.alts];
-      else {
-        this.record(union(expr.alts.map((alt) => alt.first)), pos);
-        return FAIL;
-      }
-    }
-    for (const alt of candidates) {
+    let tried = false;
+    for (const alt of expr.alts) {
+      if (!(alt.nullable || matches(alt.first, token))) continue;
+      tried = true;
       const reply = this.parseExpr(alt, pos);
       if (reply.ok) return reply;
       if (reply.committed) return reply;
+    }
+    if (!tried) {
+      if (token.kind === "error" || token.kind === "eof") {
+        for (const alt of expr.alts) {
+          const reply = this.parseExpr(alt, pos);
+          if (reply.ok) return reply;
+          if (reply.committed) return reply;
+        }
+      } else {
+        this.record(union(expr.alts.map((alt) => alt.first)), pos);
+        return FAIL;
+      }
     }
     return FAIL;
   }
@@ -352,7 +393,7 @@ class Machine {
     try {
       let value: unknown;
       let index: number;
-      const prefix = this.matchOperator(expr.levels.filter((level) => level.assoc === "prefix"), pos);
+      const prefix = this.matchOperator(expr.levels, pos, "prefix");
       if (prefix) {
         const operand = this.parsePrecedenceAt(expr, prefix.next, prefix.level.bp);
         if (!operand.ok) return operand;
@@ -370,7 +411,7 @@ class Machine {
         index = atom.next;
       }
       for (;;) {
-        const match = this.matchOperator(expr.levels.filter((level) => level.assoc !== "prefix"), index);
+        const match = this.matchOperator(expr.levels, index, "infix");
         if (!match || match.level.bp < min) return { ok: true, value, next: index };
         if (match.level.assoc === "postfix") {
           value = {
@@ -397,8 +438,8 @@ class Machine {
         };
         index = right.next;
         if (match.level.assoc === "none") {
-          const again = this.matchOperator([match.level], index);
-          if (again) {
+          const again = this.matchOperator(expr.levels, index, "infix");
+          if (again && again.level.bp === match.level.bp) {
             const token = this.token(index);
             this.diagnostics.push(error(
               `${JSON.stringify(again.text)} cannot be chained; add parentheses`,
@@ -417,20 +458,56 @@ class Machine {
   matchOperator(
     levels: readonly PrecLevel[],
     pos: number,
+    mode: "prefix" | "infix",
   ): { level: PrecLevel; value: unknown; next: number; start: number; text: string; span: Span } | undefined {
     let best: { level: PrecLevel; value: unknown; next: number; start: number; text: string; span: Span } | undefined;
-    for (const level of levels) {
-      for (const operator of level.operators) {
-        const reply = this.probe(() => this.parseExpr(operator, pos));
-        if (!reply.ok || reply.next === pos) continue;
-        const span = this.span(pos, reply.next);
-        const asText = this.tokenText(reply.value);
-        const text = asText ? asText.text : this.tokens.slice(pos, reply.next).map((entry) => entry.text).join("");
-        const match = { level, value: reply.value, next: reply.next, start: pos, text, span };
-        if (!best || span.end - span.start > best.span.end - best.span.start) best = match;
-      }
+    let index = operatorIndexes.get(levels);
+    if (!index) {
+      index = indexOperators(levels);
+      operatorIndexes.set(levels, index);
     }
+    const token = this.token(pos);
+    const table = mode === "prefix" ? index.prefix : index.infix;
+    const fallback = mode === "prefix" ? index.fallbackPrefix : index.fallbackInfix;
+    const tryOperator = (entry: OperatorEntry): void => {
+      const fast = this.fastOperator(entry.operator, pos);
+      const reply = fast ?? this.probe(() => this.parseExpr(entry.operator, pos));
+      if (!reply.ok || reply.next === pos) return;
+      const span = this.span(pos, reply.next);
+      const asText = this.tokenText(reply.value);
+      const text = asText ? asText.text : token.text;
+      const match = { level: entry.level, value: reply.value, next: reply.next, start: pos, text, span };
+      if (!best || span.end - span.start > best.span.end - best.span.start) best = match;
+    };
+    for (const entry of table.get(token.key) ?? []) tryOperator(entry);
+    if (token.kind === "word") for (const entry of table.get("word") ?? []) tryOperator(entry);
+    for (const entry of fallback) tryOperator(entry);
     return best;
+  }
+
+  fastOperator(operator: PExpr, pos: number): Reply | undefined {
+    const token = this.token(pos);
+    switch (operator.t) {
+      case "lit":
+        if (token.kind === (operator.word ? "word" : "symbol") && token.text === operator.text) {
+          return { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 };
+        }
+        return undefined;
+      case "word":
+        return token.kind === "word"
+          ? { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 }
+          : undefined;
+      case "token":
+        return token.kind === "token" && token.name === operator.name
+          ? { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 }
+          : undefined;
+      case "re":
+        return token.kind === "regex" && token.index === operator.index
+          ? { ok: true, value: { text: token.text, span: token.span }, next: pos + 1 }
+          : undefined;
+      default:
+        return undefined;
+    }
   }
 
   operatorText(match: { value: unknown; span: Span; text: string }): unknown {
