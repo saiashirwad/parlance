@@ -120,6 +120,8 @@ export type IncrementalSpec = {
   readonly field: string | null;
   /** First tokens of an item. */
   readonly sync: ReadonlySet<Key>;
+  /** Minimum number of items the root repetition requires. */
+  readonly min: 0 | 1;
   /** Root syntax outside the repetition that is not captured, such as header/footer literals. */
   readonly guarded: boolean;
 };

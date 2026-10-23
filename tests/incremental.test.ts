@@ -509,6 +509,30 @@ rule Decl = { @item "item" name:word ";" };
   assert.deepEqual(result.diagnostics, full.diagnostics);
 });
 
+test("a plus root falls back when the edit removes every item", () => {
+  const parsed = parseGrammar(String.raw`
+grammar Nonempty
+skip /\s+/
+word /[A-Za-z_][A-Za-z0-9_]*/
+root File
+rule File = { @file items:Decl+ };
+rule Decl = { @item "item" name:word ";" };
+`);
+  assert.equal(parsed.ok, true, parsed.ok ? "" : JSON.stringify(parsed.diagnostics));
+  if (!parsed.ok) throw new Error("unreachable");
+  const nonempty = compileGrammar(parsed.file);
+  assert.equal(nonempty.valid, true, nonempty.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(nonempty.spec.incremental?.min, 1);
+  const source = "item a;";
+  const edit = { start: 0, end: source.length, insert: "" };
+  const result = reparse(nonempty.spec, nonempty.parse(source), "", edit, { previousSource: source });
+  const full = nonempty.parse("");
+  assert.equal(result.stats.fallback, true);
+  assert.deepEqual(result.value, full.value);
+  assert.deepEqual(result.diagnostics, full.diagnostics);
+  assert.equal(result.ok, full.ok);
+});
+
 test("array-shaped roots splice items directly", () => {
   const source = "item a;\nitem b;\nitem c;\nitem d;\nitem e;\n";
   const start = at(source, "c;");

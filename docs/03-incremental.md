@@ -36,6 +36,7 @@ Lexing from 0 is not enough by itself. The AST items before and after the window
 - **Root syntax.** A root may have uncaptured header or footer syntax outside the item repetition, such as `"begin" items:Decl* "end"`. `incremental.guarded` records that for both array-shaped and field-shaped roots. When it is set, an edit at or outside the item range falls back, and the previous root span and captured extras bound the result. Without this, deleting the footer would be accepted by an item-only reparse while a full parse rejects the file.
 - **Parser predicates.** A predicate inside an item (`&(...)` or `!(...)`, including through a referenced rule) can inspect tokens beyond that item. Token equality cannot prove what it observed, so such grammars disable incremental mode and reparse fully. The randomized oracle covers a predicate that inspects four later items. Predicates in root syntax outside the repetition disable it for the same reason.
 - **Guarded diagnostics.** If a guarded window parse reports an error, the reparse falls back. A malformed item could otherwise make the window parser skip into header or footer syntax that was never revalidated.
+- **Non-empty roots.** A root `Decl+` requires at least one item. If the spliced result has none, the reparse falls back so the full parser reports the minimum.
 - **Custom word.** The non-ASCII custom-word path advances the lexer by the match length. Before the fix it did not advance, so a grammar with `word /[a-z]+/` looped forever.
 
 Lookbehind is the one regex feature that can read text before the resync boundary. When a token, skip, word, or inline regex contains `(?<=` or `(?<!`, `reusableTail` returns false and the run goes to end of file.
@@ -74,7 +75,7 @@ After, for the benchmark edit (a same-length replacement in the middle):
 | splice and diagnostics | 2.9 |
 | full parse, for comparison | 219 to 285 |
 
-Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 95 ms against 227 to 284 ms, or 25% to 38%; machine load and the added prefix/suffix guards move both numbers. The ratio stays well below half.
+Three final `pnpm bench` runs gave `edit ms` of 75.4, 73.3, and 73.7 against `parse ms` of 284.8, 282.2, and 275.2. That is 26% to 27% of a full parse. Repeated runs on the integrated tree measured 72 to 105 ms against 227 to 323 ms, or roughly 25% to 38%; a heavily loaded run can approach half. The added prefix/suffix guards and machine load move both numbers. Treat the ratio as an order of magnitude, never a fixed promise.
 
 The saving depends on where the edit is, because lexing runs from offset 0 to the resync boundary.
 

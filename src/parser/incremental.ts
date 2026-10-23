@@ -454,6 +454,7 @@ export const reparse = <A>(
   const after = delta === 0 ? olds : olds.map(shift);
 
   const spliced: unknown[] = [...before, ...range.values, ...after];
+  if (incremental.min > 0 && spliced.length === 0) return fallback();
   if (!ordered(spliced, source.length)) return fallback();
 
   let value: unknown;
