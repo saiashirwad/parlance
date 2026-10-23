@@ -214,6 +214,14 @@ type Binding<T = unknown> = {
 
 The core does not know what `T` is. `Language` fixes it. `showType` renders it for hover.
 
+### Imports
+
+A language declares `imports(file)` and `exports(module)`. One `ModuleGraph` per project resolves
+specifiers relative to the importer, detects cycles, analyzes dependencies first, and hands the
+checker a read-only `dependencies` view. `cx.imported(name, at)` binds a dependency binding under a
+local id while keeping its defining URI and span, so definition can cross files. Details:
+`docs/05-modules.md`.
+
 ### Type checking kit
 
 `parlance/types` is optional. It provides:
@@ -340,7 +348,7 @@ One package, `@parlance/ts-host`, for every project:
 - completion (grammar keywords + top-level definitions; local-scope completion awaits recorded scope ranges)
 - rename (single file)
 
-Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file definitions.
+Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file references.
 
 ## Package layout
 
@@ -349,6 +357,7 @@ src/
   source.ts        Source, Span, Text, edits
   diagnostic.ts    Diagnostic, render, routing
   language.ts      Language, defineLanguage, analyze, analyzeParsed
+  modules.ts       ModuleGraph, import resolution, cycle detection
   grammar/
     ast.ts         grammar AST
     parse.ts       bootstrap parser for .parl

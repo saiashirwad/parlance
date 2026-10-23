@@ -29,7 +29,8 @@ import {
 import { diagnostic, site } from "../diagnostic.ts";
 import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
-import { analyze, analyzeParsed, extensionMap, type AnyLanguage } from "../language.ts";
+import { analyze, extensionMap, type AnyLanguage } from "../language.ts";
+import { ModuleGraph } from "../modules.ts";
 import { reparse, type IncrementalStats } from "../parser/incremental.ts";
 import type { LexToken } from "../parser/spec.ts";
 
@@ -139,13 +140,33 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   const registry = extensionMap(languages);
   const connection = createConnection(process.stdin, process.stdout);
   const documents = new TextDocuments(TextDocument);
-  const analyses = new Map<string, ReturnType<typeof analyze>>();
+  const analyses = new Map<string, ReturnType<ModuleGraph["analyze"]>>();
   const encoded = new Map<string, number[]>();
+  const graph = new ModuleGraph({
+    languages,
+    read: (uri) => {
+      const open = documents.get(uri);
+      if (open) return open.getText();
+      if (!uri.startsWith("file:")) return null;
+      try {
+        return readFileSync(fileURLToPath(uri), "utf8");
+      } catch {
+        return null;
+      }
+    },
+  });
 
   const languageFor = (uri: string): AnyLanguage | undefined => {
     const path = uri.startsWith("file:") ? fileURLToPath(uri) : uri;
     for (const [extension, language] of registry) if (path.endsWith(extension)) return language;
     return undefined;
+  };
+
+  const documentAt = (uri: string): TextDocument | undefined => {
+    const open = documents.get(uri);
+    if (open) return open;
+    const source = graph.source(uri);
+    return source === undefined ? undefined : TextDocument.create(uri, "guest", 0, source);
   };
 
   connection.onInitialize(() => ({
@@ -180,9 +201,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
           ? reparse(previous.language.grammar.spec, previous.parse, text, edit, { previousSource: previous.source, mutate: true })
           : previous.language.grammar.parse(text);
         const stats = "stats" in parsed ? parsed.stats as IncrementalStats : null;
-        analysis = analyzeParsed(language, text, document.uri, parsed, stats);
+        analysis = graph.analyze(document.uri, { source: text, parsed, incremental: stats });
       } else {
-        analysis = analyze(language, text, document.uri);
+        analysis = graph.analyze(document.uri, { source: text });
       }
     } catch (cause) {
       analysis = {
@@ -246,7 +267,12 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return null;
     const definition = definitionAt(analysis.facts, document.offsetAt(position));
-    if (!definition || (definition.uri !== undefined && definition.uri !== document.uri)) return null;
+    if (!definition) return null;
+    const target = definition.uri ?? document.uri;
+    if (target !== document.uri) {
+      const other = documentAt(target);
+      return other ? { uri: target, range: range(other, definition.span) } : null;
+    }
     return { uri: document.uri, range: range(document, definition.span) };
   });
 
@@ -259,7 +285,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     const locations = analysis.facts.references
       .filter((reference) => reference.id === definition.id)
       .map((reference) => ({ uri: document.uri, range: range(document, reference.span) }));
-    if (context.includeDeclaration) locations.unshift({ uri: document.uri, range: range(document, definition.span) });
+    if (context.includeDeclaration && (definition.uri === undefined || definition.uri === document.uri)) {
+      locations.unshift({ uri: document.uri, range: range(document, definition.span) });
+    }
     return locations;
   });
 
@@ -267,12 +295,14 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return [];
-    return analysis.facts.definitions.map((definition): SymbolInformation => ({
-      name: definition.name,
-      kind: symbolKind(definition),
-      location: { uri: document.uri, range: range(document, definition.span) },
-      ...(definition.detail ? { containerName: definition.detail } : {}),
-    }));
+    return analysis.facts.definitions
+      .filter((definition) => definition.uri === undefined || definition.uri === document.uri)
+      .map((definition): SymbolInformation => ({
+        name: definition.name,
+        kind: symbolKind(definition),
+        location: { uri: document.uri, range: range(document, definition.span) },
+        ...(definition.detail ? { containerName: definition.detail } : {}),
+      }));
   });
 
   connection.onFoldingRanges(({ textDocument }) => {
@@ -311,6 +341,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     if (!document || !analysis) return null;
     const definition = definitionAt(analysis.facts, document.offsetAt(position));
     if (!definition) return null;
+    if (definition.uri !== undefined && definition.uri !== document.uri) return null;
     const spans = [
       definition.span,
       ...analysis.facts.references.filter((reference) => reference.id === definition.id).map((reference) => reference.span),

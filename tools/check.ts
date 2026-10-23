@@ -47,9 +47,26 @@ const steps: readonly Step[] = [
     ],
   },
   {
+    name: "check cross-file examples",
+    command: ["./parlance", "check", "examples/schema/catalog.schema", "examples/calc/imports.calc"],
+    expect: ["ok examples/schema/catalog.schema", "ok examples/calc/imports.calc"],
+  },
+  {
     name: "run calc through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/calc.ts"],
     expect: ["250\n250 125 true"],
+  },
+  {
+    name: "run imported examples through the Node loader",
+    command: [
+      "node",
+      "--import",
+      "./examples/register.ts",
+      "--input-type=module",
+      "-e",
+      "const calc = await import('./examples/calc/imports.calc'); const schema = await import('./examples/schema/catalog.schema'); console.log(calc.default, schema.sql.includes('Catalog') && schema.sql.includes('User'));",
+    ],
+    expect: ["250 true"],
   },
   {
     name: "run schema against node:sqlite",

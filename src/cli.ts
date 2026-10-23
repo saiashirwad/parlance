@@ -6,7 +6,8 @@ import { type Diagnostic, render } from "./diagnostic.ts";
 import { compileGrammar } from "./grammar/compile.ts";
 import { parseGrammar } from "./grammar/parse.ts";
 import { generateTypes } from "./grammar/types.ts";
-import { analyze, extensionMap, type AnyLanguage } from "./language.ts";
+import { extensionMap, type AnyLanguage } from "./language.ts";
+import { ModuleGraph } from "./modules.ts";
 
 const usage = `usage:
   parlance check <file...> [--config <path>]
@@ -57,6 +58,7 @@ const check = async (args: readonly string[]): Promise<number> => {
   if (files.length === 0) fail(usage);
   const languages = await languagesFor(args);
   const registry = extensionMap(languages);
+  const graph = new ModuleGraph({ languages });
   let errors = 0;
   for (const file of files) {
     const path = resolve(file);
@@ -67,7 +69,7 @@ const check = async (args: readonly string[]): Promise<number> => {
       continue;
     }
     const source = readFileSync(path, "utf8");
-    const analysis = analyze(language, source, path);
+    const analysis = graph.analyze(path, { source });
     errors += print(file, source, analysis.diagnostics);
     if (analysis.valid) process.stdout.write(`ok ${file}\n`);
   }
@@ -85,7 +87,7 @@ const emit = async (args: readonly string[]): Promise<number> => {
   const language = [...registry].find(([extension]) => path.endsWith(extension))?.[1];
   if (!language) fail(`${files[0]}: no registered language for this extension`);
   const source = readFileSync(path, "utf8");
-  const analysis = analyze(language!, source, path);
+  const analysis = new ModuleGraph({ languages }).analyze(path, { source });
   if (print(files[0]!, source, analysis.diagnostics) > 0 || analysis.ir === null) return 1;
   const emitTarget = language!.targets?.[target!];
   if (!emitTarget) {

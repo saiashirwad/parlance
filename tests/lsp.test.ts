@@ -162,6 +162,33 @@ test("the LSP publishes calc diagnostics on broken input", async () => {
   }
 });
 
+test("the LSP resolves a definition across imported files", async () => {
+  const blogUri = pathToFileURL("/virtual/imports/blog.schema").href;
+  const catalogUri = pathToFileURL("/virtual/imports/catalog.schema").href;
+  const blog = "schema Blog\nmodel User {\n  id: Int @primary\n}\n";
+  const catalog = "schema Catalog\nimport \"./blog.schema\";\nmodel Catalog {\n  id: Int @primary\n  owner: User\n}\n";
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const blogPublished = await client.open(blogUri, blog);
+    assert.deepEqual(blogPublished.params.diagnostics, []);
+    const catalogPublished = await client.open(catalogUri, catalog);
+    assert.deepEqual(catalogPublished.params.diagnostics, []);
+
+    const line = catalog.split("\n").findIndex((entry) => entry.includes("owner: User"));
+    const character = catalog.split("\n")[line]!.indexOf("User") + 1;
+    const definition = await client.request("textDocument/definition", {
+      textDocument: { uri: catalogUri },
+      position: { line, character },
+    });
+    assert.equal(definition.result.uri, blogUri);
+    assert.equal(definition.result.range.start.line, 1);
+  } finally {
+    client.close();
+  }
+});
+
 test("the generic LSP serves a state-machine language without new server code", async () => {
   const { readFileSync } = await import("node:fs");
   const source = readFileSync(new URL("../examples/machine/order.machine", import.meta.url), "utf8");
