@@ -23,7 +23,7 @@ node --import ./examples/register.ts examples/typescript/machine.ts
 | --- | --- |
 | calc | `250` on one line, then `250 125 true` |
 | schema | `sai@example.com 0 0` |
-| machine | `Cart Checkout Checkout` |
+| machine | `Paid Checkout Paid pay 50` |
 
 For a failure, point the loader at a file with a checker error:
 
