@@ -141,6 +141,11 @@ export class ModuleGraph {
     return this.#nodes.get(documentUri(uri));
   }
 
+  /** Drops a document and every document that transitively imports it. */
+  forget(uri: string): void {
+    this.#invalidate(documentUri(uri));
+  }
+
   source(uri: string): string | undefined {
     return this.#nodes.get(documentUri(uri))?.source;
   }
@@ -163,10 +168,14 @@ export class ModuleGraph {
     parsed: ParseResult<unknown> | undefined,
   ): ModuleNode {
     const cached = this.#nodes.get(uri);
-    if (cached && cached.source === source && parsed === undefined) return cached;
+    if (cached && cached.source === source && parsed === undefined) {
+      for (const stale of this.#staleDependencies(uri)) this.#invalidate(stale);
+      const fresh = this.#nodes.get(uri);
+      if (fresh && fresh.source === source) return fresh;
+    }
     // A dependency can change while another entry is being visited. Drop the
     // old node and every dependent before rebuilding it.
-    if (cached) this.#invalidate(uri);
+    if (this.#nodes.has(uri)) this.#invalidate(uri);
 
     const language = languageFor(this.#languages, uri);
     if (!language) throw new Error(`No parlance language is registered for ${uri}`);

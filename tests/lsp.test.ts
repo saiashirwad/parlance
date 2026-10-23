@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
@@ -223,6 +226,61 @@ test("the LSP resolves a definition across imported files", async () => {
     assert.equal(movedDefinition.result.range.start.line, 2, "the dependent analysis kept the old definition span");
   } finally {
     client.close();
+  }
+});
+
+test("closing an unsaved dependency refreshes importers from disk", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "parlance-lsp-close-"));
+  const blogPath = join(directory, "blog.schema");
+  const catalogPath = join(directory, "catalog.schema");
+  const blog = "schema Blog\nmodel User {\n  id: Int @primary\n}\n";
+  const catalog = "schema Catalog\nimport \"./blog.schema\";\nmodel Catalog {\n  id: Int @primary\n  owner: User\n}\n";
+  writeFileSync(blogPath, blog);
+  writeFileSync(catalogPath, catalog);
+  const blogUri = pathToFileURL(blogPath).href;
+  const catalogUri = pathToFileURL(catalogPath).href;
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    await client.open(blogUri, blog);
+    await client.open(catalogUri, catalog);
+    const line = catalog.split("\n").findIndex((entry) => entry.includes("owner: User"));
+    const character = catalog.split("\n")[line]!.indexOf("User") + 1;
+    const before = await client.request("textDocument/definition", {
+      textDocument: { uri: catalogUri },
+      position: { line, character },
+    });
+    assert.equal(before.result.range.start.line, 1);
+
+    const unsaved = "schema Blog\n// note\nmodel User {\n  id: Int @primary\n}\n";
+    client.notify("textDocument/didChange", {
+      textDocument: { uri: blogUri, version: 2 },
+      contentChanges: [{ text: unsaved }],
+    });
+    await client.waitDiagnostics(blogUri, 2);
+    const during = await client.request("textDocument/definition", {
+      textDocument: { uri: catalogUri },
+      position: { line, character },
+    });
+    assert.equal(during.result.range.start.line, 2, "the open importer did not see the unsaved edit");
+
+    client.notify("textDocument/didClose", { textDocument: { uri: blogUri } });
+    let after = await client.request("textDocument/definition", {
+      textDocument: { uri: catalogUri },
+      position: { line, character },
+    });
+    for (let attempt = 0; attempt < 100 && after.result?.range?.start?.line !== 1; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      after = await client.request("textDocument/definition", {
+        textDocument: { uri: catalogUri },
+        position: { line, character },
+      });
+    }
+    assert.equal(after.result.range.start.line, 1, "the importer kept the closed buffer's offsets");
+  } finally {
+    client.close();
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

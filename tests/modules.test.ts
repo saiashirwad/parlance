@@ -113,6 +113,24 @@ test("a missing dependency that appears later is re-analyzed", () => {
   assert.ok((second.ir as SchemaModule).models.some((model) => model.name.text === "Later"));
 });
 
+test("a new entry through a cached intermediate sees a changed leaf", () => {
+  const files: Record<string, string> = {
+    "memory://dir/c.schema": "schema C\nmodel C {\n  id: Int @primary\n}\n",
+    "memory://dir/b.schema": "schema B\nimport \"./c.schema\";\nmodel B {\n  id: Int @primary\n  owner: C\n}\n",
+    "memory://dir/a.schema": "schema A\nimport \"./b.schema\";\nmodel A {\n  id: Int @primary\n  owner: B\n}\n",
+  };
+  const graph = new ModuleGraph({ languages: [schema], read: (uri) => files[uri] ?? null });
+  assert.deepEqual(graph.analyze("memory://dir/b.schema").diagnostics, []);
+
+  files["memory://dir/c.schema"] = "schema C\nmodel C {\n  id: Int @primary\n  name: String\n}\n";
+  const analysis = graph.analyze("memory://dir/a.schema");
+  assert.deepEqual(analysis.diagnostics, []);
+  assert.deepEqual(
+    (analysis.ir as SchemaModule).models.find((model) => model.name.text === "C")!.fields.map((field) => field.name.text),
+    ["id", "name"],
+  );
+});
+
 test("a two-file schema imports a model and emits one SQL artifact", () => {
   const entry = new URL("../examples/schema/catalog.schema", import.meta.url).pathname;
   const graph = new ModuleGraph({ languages: [schema] });
@@ -220,6 +238,23 @@ test("imported fields and enum members navigate to their defining file", () => {
   assert.equal(member?.kind, "enumMember");
   assert.equal(member?.uri, "memory://dir/blog.schema");
   assert.equal(blog.slice(member.span.start, member.span.end), "Admin");
+});
+
+test("a three-file import keeps the model name distinct from an aliased field", () => {
+  const files = {
+    "memory://dir/c.schema": "schema C\nmodel User {\n  id: Int @primary @auto\n}\n",
+    "memory://dir/b.schema": "schema B\nimport \"./c.schema\";\n",
+    "memory://dir/a.schema": "schema A\nimport \"./b.schema\";\nquery users(): User[] =\n  User |> all;\n",
+  };
+  const analysis = memory(files).analyze("memory://dir/a.schema");
+  assert.deepEqual(analysis.diagnostics, []);
+  const source = files["memory://dir/a.schema"];
+  const at = source.indexOf("User |> all");
+  const definition = definitionAt(analysis.facts, at);
+  assert.equal(definition?.name, "User");
+  assert.equal(definition?.kind, "class");
+  assert.equal(definition?.uri, "memory://dir/c.schema");
+  assert.equal(files["memory://dir/c.schema"].slice(definition.span.start, definition.span.end), "User");
 });
 
 test("the Node loader runs imported guest files", () => {

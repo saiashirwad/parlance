@@ -289,6 +289,10 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   documents.onDidClose(({ document }) => {
     analyses.delete(document.uri);
     encoded.delete(document.uri);
+    // The graph may still hold the closed buffer's content. Drop it and
+    // re-analyze open importers against the disk source (or a missing file).
+    graph.forget(document.uri);
+    refreshOpenDependents(document.uri);
     void connection.sendDiagnostics({ uri: document.uri, diagnostics: [] });
   });
 

@@ -78,6 +78,9 @@ class ModuleGraph {
   node(uri: string): ModuleNode | undefined;
   source(uri: string): string | undefined;
 
+  /** Drops a document and every document that transitively imports it. */
+  forget(uri: string): void;
+
   /** Every analyzed document, dependencies first. */
   order(): readonly string[];
 
@@ -137,6 +140,7 @@ class Checker<Type> {
 
   /**
    * Registers a binding defined in another document as a local definition with a fresh id.
+   * Aliases are keyed by the defining URI and declaration span, not by a checker-local id.
    * References to the returned alias navigate to `uri`.
    */
   alias(binding: Binding<Type>, uri: string, at?: Span | Spanned): Binding<Type>;
@@ -179,7 +183,7 @@ Warnings are routed too. Info diagnostics stay local.
   recursive guest scan lists imported files in `watchedFiles`. Schema's TypeScript surface includes
   imported declarations; names from another file are emitted without source mappings, because a
   mapping must stay inside the transformed document.
-- **LSP.** One graph serves every language. Definition reads a use in file A, finds the imported alias with `uri` B, and converts the declaration span against B's open text or the graph cache. References walk every analyzed node and match definitions by `(uri, span)`, so aliases in other files are included. Rename uses the same match to return edits for every affected URI. An edit to one open document refreshes every open document whose graph node was invalidated, so the next request never converts an old span against new text.
+- **LSP.** One graph serves every language. Definition reads a use in file A, finds the imported alias with `uri` B, and converts the declaration span against B's open text or the graph cache. References walk every analyzed node and match definitions by `(uri, span)`, so aliases in other files are included. Rename uses the same match to return edits for every affected URI. An edit to one open document refreshes every open document whose graph node was invalidated, so the next request never converts an old span against new text. Closing a document drops its graph node and refreshes open importers against the disk source, so an unsaved buffer cannot leak past `didClose`.
 
 ## Two-file example
 

@@ -154,7 +154,7 @@ export class Checker<T = unknown> {
    * References to the returned alias navigate to `uri`.
    */
   alias(binding: Binding<T>, uri: string, value?: Span | Spanned): Binding<T> {
-    const key = `${uri}:${binding.id}`;
+    const key = `${uri}:${binding.span.start}:${binding.span.end}`;
     let local = this.#imported.get(key);
     if (!local) {
       local = { ...binding, id: this.#nextBinding++, uri };
