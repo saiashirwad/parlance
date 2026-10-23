@@ -1,17 +1,17 @@
 machine Order {
   event edit
-  event pay
+  event pay(amount: Int)
   event cancel
 
   initial state Cart {
     on edit -> Cart
-    on pay -> Checkout
+    on pay(amount) -> Checkout
     on cancel -> Cancelled
   }
 
   state Checkout {
     on edit -> Checkout
-    on pay -> Paid
+    on pay(amount) -> Paid
     on cancel -> Cancelled
   }
 

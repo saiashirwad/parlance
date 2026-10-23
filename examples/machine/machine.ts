@@ -14,15 +14,30 @@ if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message)
 const grammar = compileGrammar<File>(parsed.file, "machine.parl");
 if (!grammar.valid) throw new Error(grammar.diagnostics.map((entry) => entry.message).join("\n"));
 
+const scalars = new Set(["Int", "String", "Bool", "DateTime"]);
+
+type Scalar = "Int" | "String" | "Bool" | "DateTime";
+
 type Checked =
   | { readonly kind: "machine"; readonly name: string }
   | { readonly kind: "state"; readonly name: string; readonly final: boolean }
-  | { readonly kind: "event"; readonly name: string };
+  | { readonly kind: "event"; readonly name: string }
+  | { readonly kind: "scalar"; readonly name: Scalar };
 
-type EventIR = { readonly name: Text; readonly binding: Binding<Checked> };
+type PayloadFieldIR = {
+  readonly name: Text;
+  readonly type: Scalar | null;
+  readonly binding: Binding<Checked>;
+};
+type EventIR = {
+  readonly name: Text;
+  readonly fields: readonly PayloadFieldIR[];
+  readonly binding: Binding<Checked>;
+};
 type TransitionIR = {
   readonly event: EventIR;
   readonly target: StateIR;
+  readonly payload: readonly PayloadFieldIR[];
   readonly span: Span;
 };
 type StateIR = {
@@ -39,8 +54,16 @@ export type MachineModule = {
   readonly initial: StateIR;
 };
 
-const display = (value: Checked): string =>
-  value.kind === "machine" ? `machine ${value.name}` : `${value.kind} ${value.name}`;
+const display = (value: Checked): string => {
+  switch (value.kind) {
+    case "machine":
+      return `machine ${value.name}`;
+    case "scalar":
+      return value.name;
+    default:
+      return `${value.kind} ${value.name}`;
+  }
+};
 
 const check = (file: File, cx: Checker<Checked>): MachineModule => {
   const machineType: Checked = { kind: "machine", name: file.name.text };
@@ -61,7 +84,31 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
     const binding = cx.declare(event.name.text, event.name.span, "event", type, { detail: "event" });
     cx.bind(binding);
     cx.typed(event.name, type);
-    const value: EventIR = { name: event.name, binding };
+    const fields: PayloadFieldIR[] = [];
+    const fieldNames = new Set<string>();
+    for (const field of event.payload?.fields ?? []) {
+      if (fieldNames.has(field.name.text)) {
+        cx.error(`Duplicate payload field ${JSON.stringify(field.name.text)}`, field.name);
+        continue;
+      }
+      fieldNames.add(field.name.text);
+      if (field.name.text === "type") {
+        cx.error(`Payload field "type" is reserved for the event tag`, field.name);
+        continue;
+      }
+      const scalar = scalars.has(field.type.text) ? field.type.text as Scalar : null;
+      if (scalar === null) {
+        cx.error(`Unknown payload type ${JSON.stringify(field.type.text)}`, field.type);
+      }
+      const fieldType: Checked | undefined = scalar === null ? undefined : { kind: "scalar", name: scalar };
+      const fieldBinding = cx.declare(field.name.text, field.name.span, "property", fieldType, {
+        detail: event.name.text,
+      });
+      if (fieldType) cx.typed(field.name, fieldType);
+      if (fieldType) cx.typed(field.type, fieldType);
+      fields.push({ name: field.name, type: scalar, binding: fieldBinding });
+    }
+    const value: EventIR = { name: event.name, fields, binding };
     events.push(value);
     eventMap.set(event.name.text, value);
   }
@@ -97,8 +144,6 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
     const transitions: TransitionIR[] = [];
     const transitionsOf = declaration.kind === "final" ? [] : declaration.transitions;
     for (const transition of transitionsOf) {
-      const key = `${state.name.text}:${transition.event.text}`;
-      void key;
       if (seen.has(transition.event.text)) {
         cx.error(
           `State ${state.name.text} already handles ${JSON.stringify(transition.event.text)}`,
@@ -117,12 +162,50 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
         cx.error(`Unknown state ${JSON.stringify(transition.target.text)}`, transition.target);
         continue;
       }
+      const binding = transition.binding?.fields ?? [];
+      if (event.fields.length > 0 && !transition.binding) {
+        cx.error(`Event ${event.name.text} needs a payload binding`, transition.event);
+        continue;
+      }
+      if (event.fields.length === 0 && transition.binding) {
+        cx.error(`Event ${event.name.text} has no payload`, transition.binding);
+        continue;
+      }
+      if (event.fields.length !== binding.length) {
+        cx.error(
+          `Event ${event.name.text} expects ${event.fields.length} payload field(s), found ${binding.length}`,
+          transition.binding ?? transition.event,
+        );
+        continue;
+      }
+      let mismatched = false;
+      for (const [index, name] of binding.entries()) {
+        const field = event.fields[index]!;
+        if (name.text === field.name.text) continue;
+        cx.error(
+          `Event ${event.name.text} payload field ${index + 1} is ${JSON.stringify(field.name.text)}, found ${
+            JSON.stringify(name.text)
+          }`,
+          name,
+        );
+        mismatched = true;
+      }
+      if (mismatched) continue;
+      const payload = cx.scope(() =>
+        binding.map((name, index) => {
+          const field = event.fields[index]!;
+          cx.bind(field.binding);
+          cx.reference(field.binding, name);
+          if (field.type) cx.typed(name, { kind: "scalar", name: field.type });
+          return field;
+        })
+      );
       usedEvents.add(event.name.text);
       cx.reference(event.binding, transition.event);
       cx.reference(target.binding, transition.target);
       cx.typed(transition.event, event.binding.type!);
       cx.typed(transition.target, target.binding.type!);
-      transitions.push({ event, target, span: transition.span });
+      transitions.push({ event, target, payload, span: transition.span });
     }
     state.transitions.push(...transitions);
     if (!state.final && transitions.length === 0) {
@@ -154,16 +237,24 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
   return { name: file.name, events, states, initial: initial ?? states[0]! };
 };
 
+const scalarTs = (type: Scalar | null): string =>
+  type === null ? "unknown" : type === "Int" ? "number" : type === "Bool" ? "boolean" : "string";
+
 const types = (module: MachineModule) => {
   const prefix = module.name.text;
   return ts`export type ${synth(`${prefix}State`, module.name.span)} = ${
     module.states.map((state, index) => ts`${index ? " | " : ""}"${source(state.name)}"`)
   };
 export type ${synth(`${prefix}Event`, module.name.span)} = ${
-    module.events.map((event, index) => ts`${index ? " | " : ""}"${source(event.name)}"`)
+    module.events.map((event, index) =>
+      ts`${index ? " | " : ""}{ type: "${source(event.name)}"${
+        event.fields.map((field) => ts`; ${source(field.name)}: ${scalarTs(field.type)}`)
+      } }`
+    )
   };
 export interface ${source(module.name)} {
   readonly state: ${prefix}State;
+  readonly lastEvent: ${prefix}Event | null;
   send(event: ${prefix}Event): ${prefix}State;
 }
 export declare function start(): ${source(module.name)};
@@ -175,6 +266,10 @@ const runtime = (module: MachineModule): string =>
     data: {
       name: module.name.text,
       initial: module.initial.name.text,
+      events: module.events.map((event) => ({
+        name: event.name.text,
+        fields: event.fields.map((field) => ({ name: field.name.text, type: field.type })),
+      })),
       transitions: module.states.flatMap((state) =>
         state.transitions.map((transition) => ({
           state: state.name.text,

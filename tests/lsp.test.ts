@@ -179,13 +179,28 @@ test("the generic LSP serves a state-machine language without new server code", 
       assert.ok(names.includes(name), `missing symbol ${name}`);
     }
 
-    const line = source.split("\n").findIndex((entry) => entry.includes("on pay -> Checkout"));
+    const line = source.split("\n").findIndex((entry) => entry.includes("on pay(amount) -> Checkout"));
     const character = source.split("\n")[line]!.indexOf("Checkout");
     const hover = await client.request("textDocument/hover", {
       textDocument: { uri: machineUri },
       position: { line, character },
     });
     assert.match(hover.result.contents.value, /state Checkout/);
+
+    const payloadLine = source.split("\n").findIndex((entry) => entry.includes("event pay(amount: Int)"));
+    const payloadCharacter = source.split("\n")[payloadLine]!.indexOf("amount");
+    const payloadHover = await client.request("textDocument/hover", {
+      textDocument: { uri: machineUri },
+      position: { line: payloadLine, character: payloadCharacter },
+    });
+    assert.match(payloadHover.result.contents.value, /Int/);
+
+    const bindingCharacter = source.split("\n")[line]!.indexOf("amount");
+    const bindingHover = await client.request("textDocument/hover", {
+      textDocument: { uri: machineUri },
+      position: { line, character: bindingCharacter },
+    });
+    assert.match(bindingHover.result.contents.value, /Int/);
 
     const definition = await client.request("textDocument/definition", {
       textDocument: { uri: machineUri },

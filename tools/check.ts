@@ -59,7 +59,7 @@ const steps: readonly Step[] = [
   {
     name: "run machine through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/machine.ts"],
-    expect: ["Cart Checkout Checkout"],
+    expect: ["Paid Checkout Paid pay 50"],
   },
   { name: "drive the real LSP over an edit", command: ["node", "tools/lsp-smoke.ts"], expect: ["ok lsp edit scenario"] },
   { name: "tsgo navigates into guest files", command: ["node", "--test", "tests/tsgo.test.ts"] },
