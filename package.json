@@ -21,7 +21,8 @@
     "test": "node --test tests/*.test.ts",
     "typecheck": "tsc --noEmit --runExternalCode",
     "bench": "node tools/bench.ts",
-    "gen": "node src/grammar/cli.ts"
+    "gen": "node src/grammar/cli.ts",
+    "cli": "node src/cli.ts"
   },
   "dependencies": {
     "vscode-languageserver": "^10.1.2",
@@ -34,5 +35,8 @@
   },
   "engines": {
     "node": ">=24.2"
+  },
+  "bin": {
+    "parlance": "./src/cli.ts"
   }
 }
