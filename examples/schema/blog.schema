@@ -25,6 +25,9 @@ query userByEmail(email: String): User? =
 query publishedPosts(limit: Int): Post[] =
   Post |> where status == Published |> orderBy id desc |> limit limit |> all;
 
+query allPosts(limit: Int): Post[] =
+  Post |> orderBy id desc |> limit limit |> all;
+
 query draftCount(): Int =
   Post |> where status == Draft |> count;
 

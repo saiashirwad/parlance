@@ -57,7 +57,12 @@ test("the schema language checks models, enums, references, queries, and mutatio
   assert.deepEqual(analysis.diagnostics, []);
   const module = analysis.ir as SchemaModule;
   assert.deepEqual(module.models.map((model) => model.name.text), ["User", "Post"]);
-  assert.deepEqual(module.queries.map((query) => query.name.text), ["userByEmail", "publishedPosts", "draftCount"]);
+  assert.deepEqual(module.queries.map((query) => query.name.text), [
+    "userByEmail",
+    "publishedPosts",
+    "allPosts",
+    "draftCount",
+  ]);
   assert.deepEqual(
     module.mutations.map((mutation) => `${mutation.kind}:${mutation.name.text}`),
     [
