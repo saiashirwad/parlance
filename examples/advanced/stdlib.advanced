@@ -36,7 +36,8 @@ let head = fn(list) => match list {
   Nil => None,
   Cons(value, _) => Some(value)
 } in
-let length = fn(list) => foldList(fn(count) => fn(ignored) => count + 1)(0)(list) in
+let length = fn(list) =>
+  foldList(fn(count) => fn(ignored) => count + 1)(0)(list) in
 let rec append = fn(left) => fn(right) => match left {
   Nil => right,
   Cons(value, rest) => Cons(value, append(rest)(right))
