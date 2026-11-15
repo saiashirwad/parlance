@@ -286,3 +286,19 @@ test("tsgo checks a calc file that imports TypeScript names and reports at the g
     client.kill();
   }
 });
+test("tsgo types a snippet's result through the .embeds registry", async () => {
+  const consumer = join(root, "examples/embed/app.ts");
+  const source = readFileSync(consumer, "utf8");
+  const client = await start();
+  try {
+    const uri = pathToFileURL(consumer).href;
+    await open(client, uri, source, "typescript");
+    const diagnostics = await client.request("textDocument/diagnostic", { textDocument: { uri } });
+    assert.deepEqual(diagnostics.items, []);
+    const hover = await client.request("textDocument/hover", { textDocument: { uri }, position: position(source, "userByEmail", 1) });
+    const hoverText = typeof hover.contents === "string" ? hover.contents : hover.contents.value;
+    assert.match(hoverText, /User \| undefined/);
+  } finally {
+    client.kill();
+  }
+});
