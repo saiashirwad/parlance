@@ -77,6 +77,8 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly completions?: readonly Completion[];
   /** Optional hover text for a definition, before falling back to `show(type)`. */
   readonly describe?: (binding: Binding<Type>) => string | undefined;
+  /** Show binding types as inlay hints (needs `show`). Defaults to true. */
+  readonly inlayHints?: boolean;
   /** Check a tree that has parse errors. Defaults to true so editor facts survive typing. */
   readonly checkPartial?: boolean;
 };

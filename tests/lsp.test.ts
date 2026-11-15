@@ -526,3 +526,36 @@ test("completion offers only names in scope, declared-before names first", async
     client.close();
   }
 });
+
+test("inlay hints show binding types unless annotated or opted out", async () => {
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    await client.open(uri, source);
+    const hints = await client.request("textDocument/inlayHint", {
+      textDocument: { uri },
+      range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+    });
+    assert.deepEqual(
+      hints.result.map((hint: Message) => [hint.position, hint.label]),
+      [[{ line: 0, character: 5 }, ": number"]],
+    );
+    const outside = await client.request("textDocument/inlayHint", {
+      textDocument: { uri },
+      range: { start: { line: 1, character: 0 }, end: { line: 2, character: 0 } },
+    });
+    assert.deepEqual(outside.result, []);
+
+    // An advanced `fn(option: number)` parameter is already annotated, so it gets no hint.
+    const advancedUri = pathToFileURL("/virtual/hints.advanced").href;
+    await client.open(advancedUri, "let f = fn(option: number) => option in\nf(1)\n");
+    const annotated = await client.request("textDocument/inlayHint", {
+      textDocument: { uri: advancedUri },
+      range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+    });
+    assert.ok(!annotated.result.some((hint: Message) => hint.position.character === "let f = fn(option".length));
+  } finally {
+    client.close();
+  }
+});

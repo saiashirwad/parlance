@@ -7,6 +7,8 @@ import {
   DiagnosticSeverity,
   type DocumentSymbol,
   type FoldingRange,
+  type InlayHint,
+  InlayHintKind,
   MarkupKind,
   PositionEncodingKind,
   type Range,
@@ -172,6 +174,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       documentSymbolProvider: true,
       foldingRangeProvider: true,
       completionProvider: { triggerCharacters: ["@"] },
+      inlayHintProvider: true,
       renameProvider: true,
       semanticTokensProvider: {
         legend: { tokenTypes: [...tokenKinds], tokenModifiers: [] },
@@ -387,6 +390,31 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     const linePrefix = document.getText().slice(Math.max(0, offset - 64), offset);
     if (/@[A-Za-z0-9_]*$/.test(linePrefix)) return unique.filter((item) => item.label.startsWith("@"));
     return unique;
+  });
+
+  /** Types of variable and constant bindings, from the facts hover uses. Needs `language.show`. */
+  connection.languages.inlayHint.on(({ textDocument, range: wanted }) => {
+    const document = documents.get(textDocument.uri);
+    const analysis = analysisFor(textDocument.uri);
+    const language = languageFor(textDocument.uri);
+    if (!document || !analysis || !language?.show || language.inlayHints === false) return [];
+    const text = document.getText();
+    const from = document.offsetAt(wanted.start);
+    const to = document.offsetAt(wanted.end);
+    const hints: InlayHint[] = [];
+    for (const definition of analysis.facts.definitions) {
+      if (definition.uri !== undefined && definition.uri !== document.uri) continue;
+      if (definition.kind !== "variable" && definition.kind !== "constant") continue;
+      if (definition.type === undefined || definition.span.end < from || definition.span.end > to) continue;
+      // Skip bindings the author already annotated: `name: Type`.
+      if (/^\s*:/.test(text.slice(definition.span.end, definition.span.end + 16))) continue;
+      hints.push({
+        position: document.positionAt(definition.span.end),
+        label: `: ${language.show(definition.type)}`,
+        kind: InlayHintKind.Type,
+      });
+    }
+    return hints;
   });
 
   connection.onRenameRequest(({ textDocument, position, newName }) => {
