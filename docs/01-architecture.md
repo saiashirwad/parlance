@@ -202,7 +202,7 @@ type Checker = {
 - `alias` registers a binding from another document as a local definition with a fresh id, keeping the defining `uri`; `imported` is shorthand for an exported name from the first dependency that provides it. `dependencies` is the read-only view the module graph supplies. See [`05-modules.md`](05-modules.md).
 - `scope` isolates bindings. `bind` adds to the current scope. Declarations are hoisted explicitly by the language (call `declare` during a pre-pass, bind during elaboration).
 - `abort` records the diagnostic and throws `AbortCheck`; `check` catches it and returns `undefined`. This gives declaration-level recovery without a monad. `abort` is for "cannot continue this unit", not for ordinary type errors; ordinary errors call `error` and return a placeholder.
-- `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens, and scope extents (`scopes`, recorded by `bind`).
+- `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens, and scope extents (`scopes`, recorded by `bind` blocks and by `cx.scope`/`cx.bind`).
 
 Bindings are opaque and language-defined:
 
@@ -260,7 +260,7 @@ A `TsDoc` is `{ text, mappings }`, exactly what the content mapper needs.
 
 ### Runtime
 
-`runtime(module)` returns an ES module source string. Two idioms:
+`runtime(module)` returns an ES module source string, or a `TsDoc` built with the `ts` template. A `TsDoc` carries mappings to guest spans, and the loader appends an inline source map, so `node --enable-source-maps` reports stack frames at `.calc` positions (calc's emitter does this). Two idioms:
 
 **Emitted** — the language compiles its IR to JavaScript itself. Best for expression languages and performance.
 
@@ -350,10 +350,14 @@ One package, `@parlance/ts-host`, for every project:
 - definition and references (from facts)
 - document symbols (from definitions)
 - folding ranges (matching bracket tokens)
-- completion (grammar keywords, check facts, and language-owned `completions`; an `@` context filters to attribute items)
+- completion (grammar keywords, language-owned `completions`, and the definitions in scope at the cursor, from `inScope(facts, offset)`; names declared before the cursor sort first; an `@` context filters to attribute items)
+- inlay hints: the type of each `variable` and `constant` binding that is not already annotated (needs `show`; `inlayHints: false` opts out)
+- workspace symbols over every analyzed document in the graph
+- quick fixes: a `Diagnostic` may carry `fix: { title, edits }`, served as a `quickfix` code action. `cx.unknown(noun, name, at)`, which `bind` uses for unknown names, attaches a "did you mean" fix for the nearest in-scope name
+- semantic tokens: full, delta, and range, with `declaration` and `readonly` modifiers
 - cross-file definition, references, and rename through the module graph
 
-Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Ranges not yet promised: workspace symbols, incremental rename, formatting, and cross-file references.
+Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Scope-aware completion works for any checker: `bind` blocks record visibility extents, and `cx.scope(extent?, body)` plus `cx.bind` record them for hand-written checkers. Pass the node's span to `cx.scope` when you have it; otherwise the extent is inferred from the facts recorded inside. Names bound in the file scope are visible in the whole file. Not yet promised: incremental rename, formatting, signature help.
 
 ## Package layout
 

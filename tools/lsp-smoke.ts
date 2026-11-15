@@ -147,8 +147,16 @@ try {
   const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri } });
   assert(tokens.result.data.length > 0, "semantic tokens are empty");
 
+  const hints = await client.request("textDocument/inlayHint", {
+    textDocument: { uri },
+    range: { start: { line: 0, character: 0 }, end: { line: 2, character: 0 } },
+  });
+  assert(hints.result?.[0]?.label === ": number", `inlay hints: ${JSON.stringify(hints.result)}`);
+  const symbols = await client.request("workspace/symbol", { query: "x" });
+  assert(symbols.result?.[0]?.name === "x", "workspace symbols did not find x");
+
   const elapsed = Math.round(performance.now() - started);
-  process.stdout.write(`ok lsp edit scenario (open, break, fix, hover, definition, tokens) ${elapsed}ms\n`);
+  process.stdout.write(`ok lsp edit scenario (open, break, fix, hover, definition, tokens, inlay hints, workspace symbols) ${elapsed}ms\n`);
 } finally {
   client.close();
 }
