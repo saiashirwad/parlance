@@ -126,6 +126,7 @@ const scheduleSurfaces = () => {
 
 const readOnly = (extensions: Extension[]): Extension[] => [
   basicSetup,
+  EditorView.lineWrapping,
   editorTheme,
   highlight,
   EditorState.readOnly.of(true),
@@ -152,6 +153,7 @@ const editorFor = (name: string, text: string): EditorView => {
       extensions: [
         runKeys,
         basicSetup,
+        EditorView.lineWrapping,
         lintGutter(),
         editorTheme,
         highlight,

@@ -37,9 +37,20 @@ const options: ts.CompilerOptions = {
 const playgroundTypes = `declare module "playground" {
   /** Where this run dispatches kernels. */
   export const device: "cpu" | "webgpu";
-  type Kernel = { readonly wgsl: string; readonly bindings: object; dispatch(entry: string, workgroups: number | readonly number[], buffers: Record<string, ArrayBuffer | ArrayBufferView>): void };
+  type Workgroups = number | readonly [number, number?, number?];
+  /** A shade module: its WGSL, its bindings, and its CPU dispatcher. */
+  type Kernel<Entry, Buffers> = {
+    readonly wgsl: string;
+    readonly bindings: object;
+    dispatch(entry: Entry, workgroups: Workgroups, buffers: Buffers): void;
+  };
   /** Runs a shade kernel on the CPU or on WebGPU and writes results back into the buffers. */
-  export function dispatch(kernel: Kernel, entry: string, workgroups: number | readonly number[], buffers: Record<string, ArrayBuffer | ArrayBufferView>): Promise<void>;
+  export function dispatch<Entry extends string, Buffers>(
+    kernel: Kernel<Entry, Buffers>,
+    entry: Entry,
+    workgroups: Workgroups,
+    buffers: Buffers,
+  ): Promise<void>;
 }
 `;
 

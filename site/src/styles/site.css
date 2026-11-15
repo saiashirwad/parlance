@@ -239,7 +239,7 @@ button, select { font: inherit; color: inherit; }
 .console .error { color: var(--error); }
 .console .note { color: var(--muted); font-family: var(--sans); font-size: 13px; }
 .console .meta { color: var(--faint); font-family: var(--sans); font-size: 12px; margin-top: 10px; }
-.console pre { margin: 8px 0 0; color: var(--fg); }
+.console pre { margin: 8px 0 0; color: var(--fg); font: inherit; white-space: pre-wrap; }
 
 .problems { list-style: none; margin: 0; padding: 8px 0; overflow: auto; flex: 1; }
 .problems li { margin: 0; }

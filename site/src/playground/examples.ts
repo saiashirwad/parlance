@@ -42,23 +42,42 @@ import { type Particle, Particle as Layout, Params } from "./particles.gpu";
 import { device, dispatch } from "playground";
 
 // Struct layouts follow WGSL rules: vec3f aligns to 16 bytes.
-console.log("Particle", Layout.size, "bytes; velocity at", Layout.fields.velocity.offset);
-console.log("Params", Params.size, "bytes; gravity at", Params.fields.gravity.offset);
+console.log("Particle", Layout.size, Layout.fields.velocity.offset);
+console.log("Params", Params.size, Params.fields.gravity.offset);
 
 const start: Particle[] = [
   { position: [0, 1, 0], velocity: [1, 0, 0], color: [1, 0.5, 0, 1], age: 0 },
-  { position: [0, 0.05, 0], velocity: [0, -2, 0], color: [0, 0.5, 1, 1], age: 1.5 },
+  {
+    position: [0, 0.05, 0],
+    velocity: [0, -2, 0],
+    color: [0, 0.5, 1, 1],
+    age: 1.5,
+  },
 ];
 const particles = Layout.packArray(start);
-const params = Params.pack({ dt: 0.1, gravity: [0, -9.8, 0], drag: 0.5, lifetime: 2 });
+const params = Params.pack({
+  dt: 0.1,
+  gravity: [0, -9.8, 0],
+  drag: 0.5,
+  lifetime: 2,
+});
 
-// One step on WebGPU: the emitted WGSL, the same packed buffers, read back in place.
+// One step on WebGPU: the emitted WGSL and the same packed buffers,
+// read back in place.
 await dispatch(kernel, "simulate", 1, { params, particles });
 console.log("ran on", device);
 
-const round = (values: readonly number[]) => values.map((value) => value.toFixed(3)).join(" ");
+const round = (values: readonly number[]) =>
+  values.map((value) => value.toFixed(3)).join(" ");
 for (const p of Layout.unpackArray(particles)) {
-  console.log("particle", round(p.position), "|", round(p.velocity), "| alpha", p.color[3].toFixed(3));
+  console.log(
+    "particle",
+    round(p.position),
+    "|",
+    round(p.velocity),
+    "| alpha",
+    p.color[3].toFixed(3),
+  );
 }
 `;
 
