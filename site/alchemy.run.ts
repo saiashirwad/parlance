@@ -16,6 +16,9 @@ export default Alchemy.Stack(
       outdir: "dist",
       domain: "parlance.texoport.in",
       workersDev: true,
+      // Deep links (`/calc/demo.calc#L3`) and files a visitor made have no page of their own;
+      // every unknown path serves the playground, which reads the path itself.
+      assets: { notFoundHandling: "single-page-application" },
     });
     return { url: site.url, urls: site.urls };
   }),
