@@ -700,6 +700,12 @@ export const listen = (connection: Connection, languages: readonly AnyLanguage[]
     graph,
     changed: (uris) => {
       for (const uri of uris) if (!documents.get(uri)) graph.forget(uri);
+      // A file that appeared resolves imports that were missing; its importers re-check.
+      const appeared = new Set(uris);
+      for (const uri of graph.watched()) {
+        const missing = graph.node(uri)?.imports.some((edge) => edge.node === null && edge.uri !== null && appeared.has(edge.uri));
+        if (missing) graph.forget(uri);
+      }
       refreshOpenDependents();
     },
   };

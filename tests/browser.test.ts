@@ -189,6 +189,14 @@ test("the worker takes in-memory files and emits a document's projections", asyn
   const failed = await lsp.request("parlance/emit", { uri: "file:///play/main.calc" });
   assert.ok(failed.errors.length > 0 && failed.modules.length === 0);
 
+  // A removed import leaves the importer unresolved, and one that comes back resolves again.
+  const removed = lsp.next("file:///play/main.calc");
+  lsp.notify("parlance/files", { files: { "/play/lib.calc": null } });
+  assert.ok((await removed).some((entry) => /Cannot resolve import/.test(entry.message)));
+  const restored = lsp.next("file:///play/main.calc");
+  lsp.notify("parlance/files", { files: { "/play/lib.calc": "let base = 1;\n" } });
+  assert.deepEqual(await restored, []);
+
   const particles = readFileSync(join(root, "examples/shade/particles.gpu"), "utf8");
   await lsp.open("file:///play/particles.gpu", "shade", particles);
   const shade = await lsp.request("parlance/emit", { uri: "file:///play/particles.gpu" });
