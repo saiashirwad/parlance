@@ -34,7 +34,11 @@ export const dispatch = async (
 ): Promise<void> => {
   if (device === "cpu") return kernel.dispatch(entry, workgroups, buffers);
   const adapter = await navigator.gpu?.requestAdapter();
-  if (!adapter) throw new Error("WebGPU is not available here; run on the CPU instead");
+  if (!adapter) {
+    // A browser can have navigator.gpu and still no adapter; the CPU runs the same kernel.
+    device = "cpu";
+    return kernel.dispatch(entry, workgroups, buffers);
+  }
   const gpu = await adapter.requestDevice();
   try {
     const module = gpu.createShaderModule({ code: kernel.wgsl });
