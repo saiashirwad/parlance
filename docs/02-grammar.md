@@ -133,13 +133,28 @@ Diagnostics carry a code (`grammar/left-recursion`, `grammar/nullable-loop`, `gr
 
 ## Recovery
 
-Only the root rule's declaration repetition recovers. On an item failure the parser:
+The strict parser runs first and is unchanged. When a root item fails, the parser reparses that item in repair mode. Repair keeps the item and fills in what is missing:
 
-1. reports the farthest expected set once;
-2. skips from the item start to the next token in the item's sync set at delimiter depth zero;
-3. forces progress and continues.
+- A sequence commits after `~`, or after a matched literal that no later sibling alternative can also start with. Before it commits, a failure fails as usual, so ordered choice still works.
+- A precedence expression commits after an operator, and a separated list after a separator.
+- After a commit, a failed item skips tokens until one it can start with, or one in the sync set: what the enclosing sequences still expect (their remaining items' first tokens) plus the tokens that start a root item. A bracket group is skipped whole when it closes before such a token. A bare `word` does not take a keyword an enclosing sequence is still waiting for, so `let x = in` stops before `in`.
+- A `*` or `+` list resumes after a skipped token: `model User { id: Int ) name: String }` keeps both fields.
 
-A cut inside the item does not suppress this recovery. Nested lists fail upward; the file survives. Malformed items are omitted from the tree rather than represented as error nodes.
+Missing syntax gets a placeholder shaped like what the rule produces:
+
+| missing | value |
+| --- | --- |
+| tagged node or precedence expression | `{ kind: "error", span }`, zero width |
+| token | `{ text: "", span, missing: true }`, zero width |
+| list | `[]` |
+| optional | `null` |
+| item of a separated list (`f(1, , 2)`) | left out of the list |
+
+Diagnostics are `parse/missing` ("Expected ...", on the last character before the gap) and `parse/skipped` ("Unexpected ...", on the skipped tokens). Checkers must accept `kind: "error"` wherever a node can be missing.
+
+If repair fails too, the item is skipped as before: the farthest expected set is reported once (`parse/recover`) and the parser skips to the next token in the item's sync set at delimiter depth zero.
+
+When the root loop stops on a token no item can start with, an earlier item probably settled for a shorter alternative (in `main.advanced`, `let a = 2 + in` used to end the file at the next `=`). The parser rolls back to the earliest accepted item whose failed alternatives looked at or past that token, reparses it in repair mode, and keeps the result if it gets past the stuck token. Otherwise the root ends there with `parse/unexpected`.
 
 ## Typed ASTs
 

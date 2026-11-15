@@ -77,7 +77,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 
 Working:
 
-- `.parl` compilation with static checks, root-item recovery, and a self-hosted grammar.
+- `.parl` compilation with static checks, nested error recovery (a failed item is repaired in place with error nodes and missing tokens), and a self-hosted grammar.
 - Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, cross-file definition, references, and rename).
 - Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
