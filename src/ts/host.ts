@@ -6,7 +6,7 @@ import { discoverConfig, loadProject } from "../config.ts";
 import { type Diagnostic, site } from "../diagnostic.ts";
 import { extensionMap, type AnyLanguage } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
-import { embedRegistry, embedsExtension, embedTags, hostLocation, stubSnippets } from "./embed.ts";
+import { embedRegistry, embedsExtension, embedStamp, embedTags, hostLocation, stubSnippets, touchStamp } from "./embed.ts";
 import { type Mapping } from "./template.ts";
 
 type HostConfig = {
@@ -93,9 +93,12 @@ const identity = (
   return hash.digest("hex");
 };
 
-/** Host files a stub reads, so saving one refreshes the registry. */
+/** Host files a stub reads, so saving one refreshes the registry, and the stamp the LSP writes. */
 const hostsOf = (stubs: readonly string[], tags: ReadonlyMap<string, AnyLanguage>): string[] =>
-  stubs.flatMap((stub) => stubSnippets(stub, tags).map((host) => host.path));
+  stubs.flatMap((stub) => {
+    touchStamp(stub, true);
+    return [embedStamp(stub), ...stubSnippets(stub, tags).map((host) => host.path)];
+  });
 
 const buildProject = async (
   key: string,

@@ -725,6 +725,22 @@ test("the LSP serves snippets inside a TypeScript buffer and nothing outside the
     assert.equal(published.length, 1);
     assert.match(published[0].message, /Unknown field "emial"/);
     assert.deepEqual(published[0].range.start, at(broken, "emial"));
+
+    // Saving changed snippets writes the stamp tsgo watches, so it rebuilds the registry.
+    const { embedStamp } = await import("../src/ts/embed.ts");
+    const stamp = embedStamp(new URL("../examples/embed/parlance.embeds", import.meta.url).pathname);
+    const before = Date.now();
+    client.notify("textDocument/didSave", { textDocument: { uri: target } });
+    let written = 0;
+    for (let attempt = 0; attempt < 100 && written < before; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      try {
+        written = Number(readFileSync(stamp, "utf8"));
+      } catch {
+        written = 0;
+      }
+    }
+    assert.ok(written >= before, "the LSP should write the stub's stamp on save");
   } finally {
     client.close();
   }

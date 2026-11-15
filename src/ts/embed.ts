@@ -1,4 +1,6 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { SyntaxKind } from "typescript/ast";
@@ -357,6 +359,42 @@ const read = (path: string): string => {
     return "";
   }
 };
+
+/** Stubs covering a host file: `.embeds` files in its directory and each ancestor. */
+export const stubsFor = (path: string): string[] => {
+  const found: string[] = [];
+  for (let directory = dirname(resolve(path)); ; directory = dirname(directory)) {
+    try {
+      for (const name of readdirSync(directory)) if (name.endsWith(embedsExtension)) found.push(join(directory, name));
+    } catch {
+      // An unreadable directory has no stubs.
+    }
+    if (dirname(directory) === directory) return found;
+  }
+};
+
+/**
+ * A file outside the project that the content mapper watches for a stub. tsgo ignores disk events
+ * for files open in the editor, so saving a snippet in an open file would not refresh its types;
+ * the LSP writes this file instead, which makes tsgo reopen the project and rebuild the registry.
+ */
+export const embedStamp = (stub: string): string =>
+  join(tmpdir(), "parlance-embeds", `${createHash("sha256").update(resolve(stub)).digest("hex").slice(0, 16)}.stamp`);
+
+export const touchStamp = (stub: string, onlyIfMissing = false): void => {
+  const path = embedStamp(stub);
+  if (onlyIfMissing && existsSync(path)) return;
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${Date.now()}\n`);
+  } catch {
+    // Types then refresh on the next project reload.
+  }
+};
+
+/** What a stub's registry depends on in one host file. */
+export const snippetSignature = (snippets: readonly Snippet[]): string =>
+  snippets.map((snippet) => `${snippet.tag}\0${snippet.key}\0${snippet.text}`).join("\0\0");
 
 export type HostFile = { readonly path: string; readonly source: string; readonly snippets: readonly Snippet[] };
 

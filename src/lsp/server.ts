@@ -49,7 +49,10 @@ import {
   isSnippetUri,
   type Snippet,
   snippetDiagnostics,
+  snippetSignature,
+  stubsFor,
   toSnippet,
+  touchStamp,
 } from "../ts/embed.ts";
 import { encodeAnalysis, encodeEmbedded, folding } from "./semantic.ts";
 
@@ -149,6 +152,8 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   const tags = embedTags(languages);
   /** Snippets in open TypeScript buffers, in document order. */
   const embedded = new Map<string, readonly Region[]>();
+  /** The snippets each open TypeScript file has on disk, as of open or the last save. */
+  const saved = new Map<string, string>();
   const graph = new ModuleGraph({
     languages,
     ...options,
@@ -210,7 +215,7 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   connection.onInitialize(() => ({
     capabilities: {
       positionEncoding: PositionEncodingKind.UTF16,
-      textDocumentSync: TextDocumentSyncKind.Incremental,
+      textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental, save: true },
       hoverProvider: true,
       definitionProvider: true,
       referencesProvider: true,
@@ -279,6 +284,7 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     });
     const kept = new Set(snippets.map((snippet) => snippet.uri));
     for (const old of previous) if (!kept.has(old.snippet.uri)) graph.forget(old.snippet.uri);
+    if (!saved.has(document.uri)) saved.set(document.uri, snippetSignature(snippets));
     if (regions.length === 0 && previous.length === 0) return;
     embedded.set(document.uri, regions);
     const problems: HostDiagnostic[] = [
@@ -342,7 +348,17 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     updateEmbedded(document);
     refreshOpenDependents(document.uri);
   });
+  // tsgo does not reload types for a file open in the editor; a stamp file tells it to.
+  documents.onDidSave(({ document }) => {
+    const before = saved.get(document.uri);
+    if (before === undefined) return;
+    const after = snippetSignature((embedded.get(document.uri) ?? []).map((region) => region.snippet));
+    if (after === before) return;
+    saved.set(document.uri, after);
+    for (const stub of stubsFor(fileURLToPath(document.uri))) touchStamp(stub);
+  });
   documents.onDidClose(({ document }) => {
+    saved.delete(document.uri);
     for (const region of embedded.get(document.uri) ?? []) graph.forget(region.snippet.uri);
     embedded.delete(document.uri);
     analyses.delete(document.uri);
