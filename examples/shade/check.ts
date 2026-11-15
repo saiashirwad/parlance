@@ -75,7 +75,13 @@ export type Stmt = { readonly span: Span } & (
   | { readonly k: "block"; readonly body: readonly Stmt[] }
 );
 
-export type StructDecl = { readonly name: Text; readonly type: Extract<Ty, { k: "struct" }>; readonly span: Span };
+export type StructDecl = {
+  readonly name: Text;
+  readonly type: Extract<Ty, { k: "struct" }>;
+  /** Each field's name in the source, parallel to `type.fields`. */
+  readonly fieldNames: readonly Text[];
+  readonly span: Span;
+};
 
 export type ResourceDecl = {
   readonly name: Text;
@@ -1067,7 +1073,9 @@ export const check = (file: Ast.File, cx: Checker<Ty>, spec: BindSpec): ShadeMod
     source: cx.source,
     structs: structNodes.flatMap((node) => {
       const type = structTypes.get(node);
-      return type && type !== "busy" && bound.binding(node) ? [{ name: node.name, type, span: node.span }] : [];
+      if (!type || type === "busy" || !bound.binding(node)) return [];
+      const fieldNames = type.fields.map((field) => node.fields.find((entry) => entry.name.text === field.name)!.name);
+      return [{ name: node.name, type, fieldNames, span: node.span }];
     }),
     resources,
     fns,

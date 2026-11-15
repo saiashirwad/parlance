@@ -5,6 +5,8 @@ import { parseGrammar } from "../../src/grammar/parse.ts";
 import { defineLanguage } from "../../src/language.ts";
 import { builtinFunctions, signature } from "./builtins.ts";
 import { check, type ShadeModule } from "./check.ts";
+import { runtime } from "./emit.ts";
+import { surface } from "./surface.ts";
 import type { File } from "./shade.ast.ts";
 import { show, type Ty } from "./types.ts";
 import { wgsl } from "./wgsl.ts";
@@ -21,6 +23,8 @@ export const shade = defineLanguage<File, ShadeModule, Ty>({
   embed: { tag: "gpu" },
   grammar,
   check: (file, cx) => check(file, cx, grammar.bind!),
+  typescript: surface,
+  runtime,
   targets: {
     wgsl: (module) => ({ text: wgsl(module), fileName: "shader.wgsl" }),
   },
