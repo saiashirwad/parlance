@@ -65,7 +65,9 @@ const isNode = (value: unknown): value is Node =>
 const isText = (value: unknown): value is Text =>
   typeof value === "object" && value !== null && typeof (value as Text).text === "string";
 /** The names a field holds: one text, a list of texts, or nothing. */
-const allTexts = (value: unknown): readonly Text[] => (Array.isArray(value) ? value : [value]).filter(isText);
+const none: readonly Text[] = [];
+const allTexts = (value: unknown): readonly Text[] =>
+  Array.isArray(value) ? value.filter(isText) : isText(value) ? [value] : none;
 const isMissingName = (name: Text): boolean => name.text === "" || name.missing === true;
 /** Present names only: a missing name, from a repaired parse, was already reported. */
 const texts = (value: unknown): readonly Text[] => allTexts(value).filter((name) => !isMissingName(name));
@@ -97,7 +99,8 @@ class Walker<T> {
   readonly #spec: BindSpec;
   readonly #nodeScopes = new Map<object, Scope<T>>();
   readonly #fieldScopes = new Map<object, Map<string, Scope<T>>>();
-  readonly #fieldScoped: ReadonlySet<string>;
+  /** Fields that open a scope, by node kind. */
+  readonly #fieldScoped: ReadonlyMap<string, ReadonlySet<string>>;
   readonly onScope: (scope: Scope<T>) => void;
   scope: Scope<T>;
   readonly frames: Frame<T>[] = [];
@@ -107,9 +110,17 @@ class Walker<T> {
     this.onScope = onScope;
     this.root = { parent: null, names: new Map(), span };
     this.scope = this.root;
-    const fieldScoped = new Set<string>();
-    for (const key of spec.scopes) if (key.includes(".")) fieldScoped.add(key);
-    for (const def of spec.defs) if (def.within) fieldScoped.add(`${def.within.node}.${def.within.field}`);
+    const fieldScoped = new Map<string, Set<string>>();
+    const add = (node: string, field: string) => {
+      const fields = fieldScoped.get(node);
+      if (fields) fields.add(field);
+      else fieldScoped.set(node, new Set([field]));
+    };
+    for (const key of spec.scopes) {
+      const dot = key.indexOf(".");
+      if (dot >= 0) add(key.slice(0, dot), key.slice(dot + 1));
+    }
+    for (const def of spec.defs) if (def.within) add(def.within.node, def.within.field);
     this.#fieldScoped = fieldScoped;
   }
 
@@ -145,11 +156,12 @@ class Walker<T> {
     }
     visit(value);
     const frame = { node: value, scope: this.scope };
+    const scoped = this.#fieldScoped.get(value.kind);
     this.frames.push(frame);
     for (const key in value) {
       const child = value[key];
-      if (key === "span" || typeof child !== "object" || child === null) continue;
-      this.scope = this.#fieldScoped.has(`${value.kind}.${key}`) ? this.fieldScope(frame, key) : frame.scope;
+      if (key === "span" || typeof child !== "object" || child === null || isText(child)) continue;
+      this.scope = scoped?.has(key) ? this.fieldScope(frame, key) : frame.scope;
       this.walk(child, visit, leave);
     }
     this.frames.pop();
@@ -173,6 +185,11 @@ export type BindOptions<T> = {
    * `bind` records the reference; at the top level a name the fallback finds is also a duplicate.
    */
   readonly resolve?: (name: string, site: Text) => Binding<T> | undefined;
+  /**
+   * Vets a name before it is declared. A rejected name is the checker's to report: it gets no
+   * binding and, like a duplicate, its node's subtree is not resolved.
+   */
+  readonly accept?: (name: Text, node: any) => boolean;
 };
 
 export type Bound<T> = {
@@ -204,6 +221,7 @@ const quote = (text: string): string => JSON.stringify(text);
 export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: BindOptions<T> = {}): Bound<T> => {
   const typeOf = options.type ?? (() => undefined);
   const fallback = options.resolve ?? ((name: string) => cx.resolve(name, undefined));
+  const empty: never[] = [];
   const defs = byNode(spec.defs);
   const refs = byNode(spec.refs);
   const uniques = byNode(spec.uniques);
@@ -224,7 +242,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
   const walker = new Walker<T>(spec, { start: 0, end: cx.source.length }, (scope) => scopes.push(scope));
 
   walker.walk(root, (node) => {
-    for (const def of defs.get(node.kind) ?? []) {
+    for (const def of defs.get(node.kind) ?? empty) {
       let names: Map<string, Entry<T>>;
       let members: Entry<T>[] | null = null;
       let detail = def.detail;
@@ -256,6 +274,10 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
           const entry: Entry<T> = { binding, index: -1, node, def, from: 0, sites: [] };
           entries.set(node, entry);
           members?.push(entry);
+          continue;
+        }
+        if (options.accept?.(name, node) === false) {
+          rejected.add(node);
           continue;
         }
         if (names.has(name.text) || (top && fallback(name.text, name) !== undefined)) {
@@ -295,7 +317,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
     // After a repeat, a missing name, or an unknown name, later references in the same node are not
     // reported: `on nope -> Z` says only that `nope` is unknown, and a repaired parse does not cascade.
     let quiet = false;
-    for (const unique of uniques.get(node.kind) ?? []) {
+    for (const unique of uniques.get(node.kind) ?? empty) {
       const owner = walker.nearest(...unique.owners);
       if (!owner) continue;
       let names = seen.get(owner.node);
@@ -314,7 +336,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         cx.error(message, site);
       }
     }
-    for (const ref of refs.get(node.kind) ?? []) {
+    for (const ref of refs.get(node.kind) ?? empty) {
       for (const site of allTexts(node[ref.field])) {
         if (isMissingName(site)) {
           quiet = true;

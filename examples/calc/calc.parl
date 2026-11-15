@@ -44,3 +44,9 @@ rule BooleanLit = {
 rule Name = {
   word
 };
+
+bind {
+  import import.specifier
+  export def let.name: variable after
+  ref name.value: variable "name"
+}

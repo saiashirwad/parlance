@@ -46,7 +46,14 @@ const scoped = defineLanguage<any, null, string>({
   grammar,
   check: (file, cx) => {
     cx.bind(cx.declare("host", { start: 0, end: 0 }, "variable", "manual"));
-    bound = bind(file, cx, grammar.bind!, { builtin: (name) => `builtin ${name}` });
+    bound = bind(file, cx, grammar.bind!, {
+      builtin: (name) => `builtin ${name}`,
+      accept: (name) => {
+        if (name.text !== "reserved") return true;
+        cx.error("reserved", name);
+        return false;
+      },
+    });
     for (const item of file.items) if (item.kind === "let") bound.define(item, `let ${item.name.text}`);
     return null;
   },
@@ -115,4 +122,13 @@ test("bind: defineLanguage derives imports and builtin completions", () => {
     { label: "Int", kind: "type", detail: "type" },
     { label: "String", kind: "type", detail: "type" },
   ]);
+});
+
+test("bind: rejected and duplicate definitions do not cascade", () => {
+  // The duplicate's own subtree is not resolved, as a checker would skip a rejected declaration.
+  assert.deepEqual(messages("let a = host;\nlet a = nope;\n"), ['Duplicate name "a"']);
+  assert.deepEqual(messages("let reserved = nope;\nshow reserved;\n"), ["reserved", 'Unknown name "reserved"']);
+  // After a repeat or an unknown name, later names in the same node are not reported.
+  assert.deepEqual(messages("record P { x: Int; y: Int; }\n"), ['P repeats "Int"']);
+  assert.deepEqual(messages("record P { x: Bogus; }\nshow fn x => nope;\n"), ['Unknown type "Bogus"', 'Unknown name "nope"']);
 });

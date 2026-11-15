@@ -1,9 +1,9 @@
 import { readFileSync } from "node:fs";
-import { type Binding, type Checker, type Spanned } from "../../src/check/index.ts";
+import { bind, type Binding, type Bound, type Checker, type Spanned } from "../../src/check/index.ts";
 import { type Diagnostic, error } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage, importSpecifier } from "../../src/language.ts";
+import { defineLanguage } from "../../src/language.ts";
 import type { Span, Text } from "../../src/source.ts";
 import { source, ts } from "../../src/ts/index.ts";
 import { TypeStore, type Type } from "../../src/types/index.ts";
@@ -63,7 +63,7 @@ const sameKind = (store: TypeStore, left: Type, right: Type): boolean => {
 };
 
 /** `result` holds the type of the expression just checked. */
-type ExprContext = { readonly cx: Checker<Type>; readonly store: TypeStore; result: Type };
+type ExprContext = { readonly cx: Checker<Type>; readonly bound: Bound<Type>; readonly store: TypeStore; result: Type };
 
 const expectNumber = (context: ExprContext, type: Type, at: Spanned): void => {
   const mark = context.store.mark();
@@ -95,9 +95,9 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
       return { kind: "boolean", value };
     }
     case "name": {
-      const binding = cx.resolve(expr.value.text, expr.value.span);
+      // `bind` resolved the name, or reported it unknown.
+      const binding = context.bound.resolved(expr.value);
       if (!binding) {
-        cx.error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
         const type = store.unknown();
         context.result = type;
         return { kind: "number", value: 0 };
@@ -158,7 +158,6 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
 
 const check = (file: File, cx: Checker<Type>): CalcModule => {
   const store = new TypeStore();
-  const context: ExprContext = { cx, store, result: store.unknown() };
   const declarations: CalcDecl[] = [];
   const imports: CalcImport[] = [];
   let result: CalcExpr | null = null;
@@ -186,6 +185,8 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
     }
     if (bindings.length > 0) imports.push({ specifier: dependency.specifier, bindings });
   }
+  const bound = bind(file, cx, grammar.bind!, { accept: (name) => !reserved.has(name.text) });
+  const context: ExprContext = { cx, bound, store, result: store.unknown() };
   for (let index = 0; index < file.declarations.length; index++) {
     const declaration = file.declarations[index]!;
     if (declaration.kind === "import") continue;
@@ -195,16 +196,12 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
         cx.error(`${JSON.stringify(name.text)} is reserved in TypeScript and JavaScript`, name);
         continue;
       }
-      if (cx.resolve(name.text, undefined)) {
-        cx.error(`Duplicate name ${JSON.stringify(name.text)}`, name);
-        continue;
-      }
+      // A duplicate has no binding; `bind` reported it.
+      if (!bound.binding(declaration)) continue;
       const value = checkExpr(declaration.value, context);
       const valueType = context.result;
       if (cx.isMissing(name)) continue;
-      const binding = cx.declare(name.text, name.span, "variable", valueType);
-      cx.bind(binding);
-      cx.typed(name, valueType);
+      const binding = bound.define(declaration, valueType)!;
       declarations.push({ kind: "let", name, binding, value });
     } else {
       const value = checkExpr(declaration.value, context);
@@ -294,8 +291,6 @@ export const calc = defineLanguage<File, CalcModule, Type>({
   extensions: [".calc"],
   grammar,
   check,
-  imports: (file) =>
-    file.declarations.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
   exports: (module) =>
     module.declarations.flatMap((declaration) => declaration.kind === "let" ? [declaration.binding] : []),
   typescript: types,
