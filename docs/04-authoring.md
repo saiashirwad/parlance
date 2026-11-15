@@ -102,7 +102,9 @@ The generated module starts with the helper types and one interface per tagged a
 ```ts
 export type Span = { readonly start: number; readonly end: number };
 
-export type Text = { readonly text: string; readonly span: Span };
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export interface FileFileNode {
   readonly kind: "file";
@@ -125,6 +127,7 @@ The naming rules are mechanical:
 - A tagged alternative becomes `<Rule><Tag>Node`, so `@let` in `Decl` becomes `DeclLetNode`.
 - A rule becomes a union of its alternatives, or an alias when it has one shape. `Decl` is the union of `DeclLetNode` and `DeclShowNode`.
 - A precedence rule also gets `<Rule>BinaryNode`, `<Rule>PrefixNode`, and `<Rule>PostfixNode`.
+- A rule whose value repair can leave missing gets `| ErrorNode` in its union: a precedence rule with an operator, and a tagged or mixed-shape rule that some sequence references after it commits (after `~`, or after a literal no later sibling shares). Calc's `Expr` has it; `Decl`, only ever parsed in a list, does not. A missing token is a `Text` with `missing: true` and empty `text`.
 - A rule named `Text` or `Span` becomes `TextRule` or `SpanRule` with a warning, because those names are taken by the helpers. A rule that is a TypeScript reserved word gets the same suffix.
 
 Rerun `gen` after every grammar change and check in the result. `tests/grammar-types.test.ts` asserts that `examples/calc/calc.ast.ts` is current.
@@ -193,6 +196,25 @@ Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `
 - `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. Items may set `insertText` when the displayed label should not be inserted verbatim.
 
 The type kit is optional. `parlance/types` exports `TypeStore`, a mutable store with `mark` and `restore`, and `printType`. Calc uses it to infer `number` and `boolean`. Schema and machine use their own domain types.
+
+### Handle error nodes
+
+A repaired parse leaves `{ kind: "error", span }` where a node is missing and `{ text: "", missing: true }` where a token is, and the parser has already reported each one. The checker's job is to say nothing more:
+
+- Give `case "error"` to every switch over a union that includes `ErrorNode`; TypeScript reports the switch until you do. Return a placeholder IR and a type that agrees with anything:
+
+  ```ts
+  case "error":
+    context.result = store.error();
+    return { kind: "number", value: 0 };
+  ```
+
+- `isError(node)` (also `cx.isError`) narrows away `ErrorNode`; `isMissing(value)` is true for an error node or a missing token.
+- `cx.error`, `warn`, and `info` drop a report whose target is an error node or a missing token, so pass the node itself, not its `span`.
+- A missing (empty) name never resolves, and `declare`, `define`, `bind`, and `reference` skip it, so no "Unknown name" or empty definition follows.
+- `TypeStore.error()` is a poison type: it unifies with everything, a variable unified with it becomes error too, a union containing it is error, and it prints as `unknown`. Use it for a missing operand so `1 + ` does not also report "Expected number". A checker with its own types can use a fresh type variable, as advanced does.
+
+`tests/recovery.test.ts` checks that a missing operand, type, or name in each example produces only the parse diagnostic.
 
 Set `checkPartial: false` only when your checker cannot tolerate a tree with parse errors. The default is `true`, so editor facts survive while the user types.
 

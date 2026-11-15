@@ -8,6 +8,7 @@ import { reparse } from "../src/parser/incremental.ts";
 import { diff } from "../src/source.ts";
 import { advanced } from "../examples/advanced/advanced.ts";
 import { calc } from "../examples/calc/calc.ts";
+import { machine } from "../examples/machine/machine.ts";
 import { schema } from "../examples/schema/schema.ts";
 
 const root = new URL("..", import.meta.url).pathname;
@@ -167,4 +168,28 @@ test("single-token deletions analyze without internal errors", () => {
       assert.equal(internal, undefined, `deleting ${JSON.stringify(tokens.textAt(index))} at ${tokens.startAt(index)}`);
     }
   }
+});
+
+test("a missing operand or name is reported once, by the parser", () => {
+  const order = read("examples/machine/order.machine");
+  const model = "schema T\nmodel User {\n  id: Int @primary\n  name: String\n}\n";
+  const cases: [string, () => readonly { readonly code?: string }[]][] = [
+    ["calc operand", () => analyze(calc, "let a = 1 + ;\nshow a * 2;\n").diagnostics],
+    ["calc prefix operand", () => analyze(calc, "show -;\n").diagnostics],
+    ["calc value", () => analyze(calc, "let a = ;\nshow a + 1 == 2;\n").diagnostics],
+    ["calc name", () => analyze(calc, "let = 5;\nshow 1;\n").diagnostics],
+    ["advanced operand", () => analyzeMain(replace(main, "let a = 2 + 5 in", "let a = 2 + in")).diagnostics],
+    ["advanced value", () => analyzeMain(replace(main, "let a = 2 + 5 in", "let a = in")).diagnostics],
+    ["advanced type", () => analyzeMain(replace(main, "let a = 2 + 5 in", "let a = (fn(x: ) => x)(2) + 5 in")).diagnostics],
+    ["advanced field name", () => analyzeMain(replace(main, "print(answer) in", "print(answer.) in")).diagnostics],
+    ["schema field type", () => analyze(schema, model.replace("name: String", "name:"), "memory://t.schema").diagnostics],
+    ["schema default", () => analyze(schema, model.replace("name: String", "name: String @default()"), "memory://t.schema").diagnostics],
+    ["schema where value", () => analyze(schema, `${model}query q(): User? = User |> where id == |> first;\n`, "memory://t.schema").diagnostics],
+    ["schema terminal", () => analyze(schema, `${model}query q(): User? = User |> ;\n`, "memory://t.schema").diagnostics],
+    ["schema result type", () => analyze(schema, `${model}query q(): = User |> first;\n`, "memory://t.schema").diagnostics],
+    ["schema insert value", () => analyze(schema, `${model}insert User { id: 1, name: };\n`, "memory://t.schema").diagnostics],
+    ["machine event name", () => analyze(machine, replace(order, "on edit -> Cart", "on -> Cart"), "memory://o.machine").diagnostics],
+    ["machine target", () => analyze(machine, replace(order, "on cancel -> Cancelled\n  }\n\n  state Paid", "on cancel ->\n  }\n\n  state Paid"), "memory://o.machine").diagnostics],
+  ];
+  for (const [name, diagnostics] of cases) assert.deepEqual(codes(diagnostics()), ["parse/missing"], name);
 });
