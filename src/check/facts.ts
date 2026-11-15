@@ -70,6 +70,9 @@ export type Reference = { readonly id: number; readonly span: Span };
 
 export type Typed<T = unknown> = { readonly span: Span; readonly type: T };
 
+/** Where a definition is visible by its bare name: the extent of its scope, from where it starts. */
+export type ScopeExtent = { readonly id: number; readonly span: Span };
+
 export type Facts<T = unknown> = {
   readonly uri?: string;
   readonly diagnostics: Diagnostic[];
@@ -77,6 +80,8 @@ export type Facts<T = unknown> = {
   readonly references: Reference[];
   readonly types: Typed<T>[];
   readonly tokens: Token[];
+  /** Visibility extents, where a checker records them (`bind` does); empty otherwise. */
+  readonly scopes: ScopeExtent[];
 };
 
 export const facts = <T = unknown>(
@@ -90,7 +95,17 @@ export const facts = <T = unknown>(
   references: [],
   types: [],
   tokens,
+  scopes: [],
 });
+
+/** Definitions visible at `offset` by the recorded scope extents, innermost first. */
+export const visibleAt = <T>(value: Facts<T>, offset: number): Definition<T>[] => {
+  const byId = new Map(value.definitions.map((definition) => [definition.id, definition]));
+  return value.scopes
+    .filter((scope) => scope.span.start <= offset && offset <= scope.span.end)
+    .sort((a, b) => (a.span.end - a.span.start) - (b.span.end - b.span.start))
+    .flatMap((scope) => byId.get(scope.id) ?? []);
+};
 
 export const contains = (outer: Span, offset: number): boolean => outer.start <= offset && offset < outer.end;
 

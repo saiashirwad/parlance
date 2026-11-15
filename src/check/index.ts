@@ -9,13 +9,26 @@ export {
   type Reference,
   referenceAt,
   refinedKinds,
+  type ScopeExtent,
   semanticTokens,
   type Token,
   type TokenKind,
   tokenKinds,
   type Typed,
   typeAt,
+  visibleAt,
 } from "./facts.ts";
+export {
+  bind,
+  type BindBuiltin,
+  type BindDef,
+  type BindOptions,
+  type BindRef,
+  type BindSpec,
+  type BindUnique,
+  type Bound,
+  boundImports,
+} from "./bind.ts";
 export {
   at,
   type CheckOptions,

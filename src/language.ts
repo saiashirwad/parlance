@@ -1,4 +1,13 @@
-import { type Binding, Checker, type Dependency, type Facts, semanticTokens, type Token } from "./check/index.ts";
+import {
+  type Binding,
+  boundImports,
+  Checker,
+  type DefinitionKind,
+  type Dependency,
+  type Facts,
+  semanticTokens,
+  type Token,
+} from "./check/index.ts";
 import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
@@ -78,9 +87,49 @@ export type LanguageOptions<Ast, Ir, Type> = Omit<Language<Ast, Ir, Type>, "chec
   readonly checkPartial?: boolean;
 };
 
+const completionOf = (kind: DefinitionKind): CompletionKind => {
+  switch (kind) {
+    case "function":
+    case "method":
+    case "macro":
+      return "function";
+    case "variable":
+    case "parameter":
+      return "variable";
+    case "property":
+    case "enumMember":
+      return kind;
+    case "constant":
+    case "namespace":
+    case "event":
+      return "constant";
+    default:
+      return "type";
+  }
+};
+
+/**
+ * A grammar's `bind` block supplies defaults: `import` lines become `imports` and `builtin` names
+ * become completions. An explicit `imports` wins; explicit completions come first.
+ */
 export const defineLanguage = <Ast, Ir, Type = unknown>(
   language: LanguageOptions<Ast, Ir, Type>,
-): Language<Ast, Ir, Type> => language;
+): Language<Ast, Ir, Type> => {
+  const spec = language.grammar.bind;
+  if (!spec) return language;
+  const builtins = spec.builtins.map((entry): Completion => ({
+    label: entry.name,
+    kind: completionOf(entry.kind),
+    detail: entry.label,
+  }));
+  return {
+    ...language,
+    ...(language.imports !== undefined || spec.imports.length === 0
+      ? {}
+      : { imports: (file: Ast) => boundImports(file, spec).map(importSpecifier) }),
+    ...(builtins.length === 0 ? {} : { completions: [...(language.completions ?? []), ...builtins] }),
+  };
+};
 
 export type Analysis<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly language: Language<Ast, Ir, Type>;
