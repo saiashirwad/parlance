@@ -4,6 +4,7 @@ packages:
 
 allowBuilds:
   esbuild: true
+  workerd: false
 
 minimumReleaseAgeExclude:
   - '@typescript/typescript-aix-ppc64@7.1.0-beta'

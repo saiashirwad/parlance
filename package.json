@@ -35,6 +35,7 @@
     "compare:gate": "node tools/compare-langkit.mjs --gate",
     "site:dev": "pnpm --filter @parlance/site dev",
     "site:build": "pnpm --filter @parlance/site build",
+    "site:deploy": "pnpm --filter @parlance/site deploy",
     "site:test": "pnpm --filter @parlance/site test"
   },
   "dependencies": {

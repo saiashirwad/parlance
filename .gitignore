@@ -3,3 +3,6 @@ node_modules
 *.tsbuildinfo
 .DS_Store
 .opencode/skills/verify-parlance/evidence/
+
+.alchemy/
+.env
