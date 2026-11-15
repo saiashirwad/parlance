@@ -96,6 +96,11 @@ const steps: readonly Step[] = [
     expect: ["1 1 Tools"],
   },
   {
+    name: "run TypeScript with embedded snippets through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/embed/app.ts"],
+    expect: ["sai@example.com Admin 125 true"],
+  },
+  {
     name: "run machine through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/machine.ts"],
     expect: ["Paid Checkout Paid pay 50"],
