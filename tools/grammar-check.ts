@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 /**
  * Compiles every checked-in grammar and proves each generated AST file matches
- * its grammar. This is the guard that catches a `.parl` edit without `parlance gen`.
+ * its grammar. This is the guard that catches a `.parl` edit without `parlance gen`. Each
+ * grammar's `.parl.ts` text module, which languages import in place of reading the file,
+ * must match too (`parlance source`).
  *
  * It also runs the self-host check: the grammar language parses itself with its
  * compiled parser and produces the same AST as the bootstrap parser.
@@ -11,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { withoutSpans } from "../src/grammar/ast.ts";
 import { compileGrammar } from "../src/grammar/compile.ts";
 import { parseGrammar } from "../src/grammar/parse.ts";
+import { grammarSourceModule } from "../src/grammar/source.ts";
 import { generateTypes } from "../src/grammar/types.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
@@ -27,6 +30,7 @@ const grammars = [
 const failures: string[] = [];
 let compiledCount = 0;
 let astCount = 0;
+let sourceCount = 0;
 
 for (const grammar of grammars) {
   const source = readFileSync(`${root}/${grammar.path}`, "utf8");
@@ -44,6 +48,21 @@ for (const grammar of grammars) {
   const rules = parsed.file.rules.length;
   const tokens = parsed.file.tokens.length;
   process.stdout.write(`ok ${grammar.path} (${rules} rules, ${tokens} tokens)\n`);
+
+  const module = `${grammar.path}.ts`;
+  const expected = grammarSourceModule(source, grammar.path.slice(grammar.path.lastIndexOf("/") + 1));
+  let current: string | null = null;
+  try {
+    current = readFileSync(`${root}/${module}`, "utf8");
+  } catch {
+    // Reported below.
+  }
+  if (current !== expected) {
+    failures.push(`${module} is ${current === null ? "missing" : "stale"}. Regenerate with:\n  node src/grammar/cli.ts source ${grammar.path} ${module}`);
+  } else {
+    sourceCount++;
+    process.stdout.write(`ok ${module} is current\n`);
+  }
 
   if (grammar.ast === null) continue;
   const generated = generateTypes(parsed.file);
@@ -88,5 +107,5 @@ if (failures.length > 0) {
   process.stderr.write(`\n${failures.map((failure) => `FAIL ${failure}`).join("\n")}\n`);
   process.exitCode = 1;
 } else {
-  process.stdout.write(`\nok ${compiledCount} grammars, ${astCount} generated ASTs current, self-host current\n`);
+  process.stdout.write(`\nok ${compiledCount} grammars, ${astCount} generated ASTs current, ${sourceCount} source modules current, self-host current\n`);
 }

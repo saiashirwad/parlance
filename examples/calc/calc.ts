@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { bind, type Binding, type Bound, type Checker, type ForeignModule, type Spanned } from "../../src/check/index.ts";
 import { type Diagnostic, error } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
@@ -8,8 +7,8 @@ import type { Span, Text } from "../../src/source.ts";
 import { foreignImports, foreignRuntime, source, synth, ts, type TsDoc } from "../../src/ts/index.ts";
 import { TypeStore, type Type } from "../../src/types/index.ts";
 import type { BooleanLit, Decl, Expr, File, Name } from "./calc.ast.ts";
+import sourceText from "./calc.parl.ts";
 
-const sourceText = readFileSync(new URL("./calc.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "calc.parl");
 if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry: Diagnostic) => entry.message).join("\n"));
 const grammar = compileGrammar<File>(parsed.file, "calc.parl");

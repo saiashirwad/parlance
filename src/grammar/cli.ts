@@ -3,9 +3,12 @@ import { resolve } from "node:path";
 import { type Diagnostic, render } from "../diagnostic.ts";
 import { compileGrammar } from "./compile.ts";
 import { parseGrammar } from "./parse.ts";
+import { grammarSourceModule } from "./source.ts";
 import { generateTypes } from "./types.ts";
 
-const usage = "usage: node src/grammar/cli.ts gen <grammar.parl> <out.ts>\n       node src/grammar/cli.ts types <grammar.parl>";
+const usage = "usage: node src/grammar/cli.ts gen <grammar.parl> <out.ts>\n"
+  + "       node src/grammar/cli.ts source <grammar.parl> <out.ts>\n"
+  + "       node src/grammar/cli.ts types <grammar.parl>";
 
 const printDiagnostics = (source: string, diagnostics: readonly Diagnostic[]): void => {
   if (diagnostics.length === 0) return;
@@ -38,6 +41,15 @@ const main = (argv: readonly string[]): number => {
     if (generated.diagnostics.some((entry) => entry.severity === "error")) return 1;
     writeFileSync(resolve(output), generated.text);
     process.stdout.write(`wrote ${output} (${Buffer.byteLength(generated.text, "utf8")} bytes)\n`);
+    return 0;
+  }
+  if (command === "source" && args.length === 2) {
+    const [grammar, output] = args as [string, string];
+    const loaded = load(grammar);
+    if (!loaded) return 1;
+    const text = grammarSourceModule(loaded.source, grammar.slice(grammar.lastIndexOf("/") + 1));
+    writeFileSync(resolve(output), text);
+    process.stdout.write(`wrote ${output} (${Buffer.byteLength(text, "utf8")} bytes)\n`);
     return 0;
   }
   if (command === "types" && args.length === 1) {

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type { Diagnostic } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
@@ -10,8 +9,8 @@ import { surface } from "./surface.ts";
 import type { File } from "./shade.ast.ts";
 import { show, type Ty } from "./types.ts";
 import { wgsl } from "./wgsl.ts";
+import sourceText from "./shade.parl.ts";
 
-const sourceText = readFileSync(new URL("./shade.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "shade.parl");
 if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry: Diagnostic) => entry.message).join("\n"));
 export const grammar = compileGrammar<File>(parsed.file, "shade.parl");
