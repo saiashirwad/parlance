@@ -140,20 +140,38 @@ The language's `check` field receives the parsed AST and a `Checker` from `parla
 readonly check: (file: Ast, cx: Checker<Type>) => Ir;
 ```
 
-The function returns checked IR. It reports errors through `cx`; it does not throw for guest errors. `examples/calc/calc.ts` walks expressions and resolves names:
+The function returns checked IR. It reports errors through `cx`; it does not throw for guest errors.
 
-```ts
-case "name": {
-  const binding = cx.resolve(expr.value.text, expr.value.span);
-  if (!binding) {
-    cx.error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
-    return { ir: { kind: "number", value: 0 }, type: store.unknown() };
-  }
-  const type = binding.type ?? store.unknown();
-  cx.typed(expr, type);
-  return { ir: { kind: "name", binding }, type };
+### Bind names declaratively
+
+Most name rules fit a grammar's [`bind` block](02-grammar.md#name-binding). Calc's whole scoping is three lines:
+
+```parl
+bind {
+  import import.specifier
+  export def let.name: variable after
+  ref name.value: variable "name"
 }
 ```
+
+The checker runs it first, then reads the results:
+
+```ts
+const bound = bind(file, cx, grammar.bind!, { accept: (name) => !reserved.has(name.text) });
+// ...
+case "name": {
+  const binding = context.bound.resolved(expr.value); // bind already reported an unknown name
+  ...
+}
+// once the value's type is known:
+const binding = bound.define(declaration, valueType)!;
+```
+
+`bind` walks the tree twice (declare, then resolve) and records definitions, references, hover types, scope extents (`facts.scopes`, where each name is visible), and "Duplicate name" / "Unknown ..." diagnostics. The result answers `binding(node)`, `resolved(site)`, `target(site)` (the defining node), `builtin(site)`, `members(node)`, `used(binding)`, `duplicate(site)`, and `exports`. `define(node, type)` settles a type the checker computes later and types every reference to it.
+
+Options: `type(node)` gives a definition's type when it is declared; `builtin(name)` gives a builtin's; `accept(name, node)` rejects a name the checker reports itself (calc's reserved words); `resolve(name)` is the fallback for names `bind` does not own, and defaults to `cx.resolve`, so bindings you add by hand (calc's imports via `cx.imported`) resolve too. Top-level hoisted names are also `cx.bind`-ed, so manual `cx.resolve` sees them. A duplicate or rejected definition's subtree is not resolved, and after one unknown name a node reports no more, so broken input does not cascade.
+
+Anything the block cannot say stays in the checker: machine still checks payload arity, reachability, and the reserved `type` field by hand. The `Checker` methods below are the same ones `bind` uses.
 
 The `Checker` methods you will use:
 
@@ -189,11 +207,11 @@ for (const declaration of file.declarations) {
 
 `cx.scope` is not recovery. Use it for parameters and locals. `examples/schema/schema.ts` opens a scope around each query so parameters and fields do not leak into the next query.
 
-Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, and `tokens`. The LSP reads composed facts, not your AST. Optional fields improve hover and completion:
+Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, `tokens`, and `scopes` (visibility extents; `visibleAt(facts, offset)` lists the names in scope). The LSP reads composed facts, not your AST. Optional fields improve hover and completion:
 
 - `show(type)` renders a checked type.
 - `describe(binding)` renders a definition, with `show` as the fallback.
-- `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. Items may set `insertText` when the displayed label should not be inserted verbatim.
+- `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. `builtin` names in a `bind` block are added for you. Items may set `insertText` when the displayed label should not be inserted verbatim.
 
 The type kit is optional. `parlance/types` exports `TypeStore`, a mutable store with `mark` and `restore`, and `printType`. Calc uses it to infer `number` and `boolean`. Schema and machine use their own domain types.
 

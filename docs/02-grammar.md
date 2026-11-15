@@ -45,6 +45,7 @@ rule Name = { word };
 | `token Name /pattern/` | a named terminal; optional `@highlight` maps it to an LSP token kind |
 | `root Name` | the start rule; optional, defaults to the first rule |
 | `rule Name = Body;` | a production |
+| `bind { ... }` | declarative name binding over tagged nodes; optional, last; see [Name binding](#name-binding) |
 
 A braced body (`= { ... };`) contains alternatives. A precedence body (`= precedence { ... };`) is described below. Semicolons terminate rules.
 
@@ -116,6 +117,40 @@ rule Expr = precedence {
 
 A tag names a node shape within its rule. Two rules can both use `@token` with different fields; generated types scope them per rule. A single rule cannot use the same tag with two different field sets without an explicit diagnostic, because a consumer switching on `kind` would lose precision.
 
+## Name binding
+
+A `bind` block says which labelled fields define names and which refer to them. It names nodes by tag and fields by label, as `tag.field`. `examples/machine/machine.parl`:
+
+```parl
+bind {
+  import import.specifier
+  builtin Int, String, Bool, DateTime: type "scalar"
+  def machine.name: namespace
+  export def event.name: event "event"
+  def field.name: property "payload field" in event
+  export def initial.name, state.name, final.name: class "state"
+  ref transition.event: event
+  ref transition.target: state
+  ref field.type: scalar "payload type"
+  unique transition.event in initial, state "State {owner} already handles {name}"
+}
+```
+
+| Entry | Meaning |
+| --- | --- |
+| `def p: kind "label"` | each name in `p` is a definition of LSP `kind` (`variable`, `class`, ...). `"label"` is its namespace, the noun in "Duplicate ..." messages, and its detail; it defaults to `kind`. Hoisted: visible in the whole enclosing scope |
+| `def p: kind after` | sequential: visible from the end of its node to the end of the scope (calc's `let`) |
+| `def p: kind in tag.field` | visible only inside that field of the nearest `tag` node, the node itself included (`def fn.param: parameter in fn.body`) |
+| `def p: kind in tag` | a member of the nearest enclosing `tag` node, not a lexical name; read back with `bound.members(node)` |
+| `export def ...` | also listed in `bound.exports` |
+| `ref p: label "noun"` | each name resolves to a visible `def` or `builtin` with that label, innermost scope first, else "Unknown noun" (noun defaults to the label) |
+| `scope tag`, `scope tag.field` | that node, or that field, opens a lexical scope. The file is always one |
+| `builtin A, B: kind "label"` | names in an outermost scope, with no source span. They also become completions |
+| `unique p in tag, ...` | a name may appear once per nearest `tag` node; the optional message may use `{name}` and `{owner}` |
+| `import p` | `p` holds import specifiers; `defineLanguage` uses it when the language gives no `imports` |
+
+Duplicates are checked per scope across labels, so an event and a state cannot share a name. The checker runs it with `bind(file, cx, grammar.bind)`; see [Bind names declaratively](04-authoring.md#bind-names-declaratively).
+
 ## Static checks
 
 Compilation fails, with grammar spans, on:
@@ -126,6 +161,7 @@ Compilation fails, with grammar spans, on:
 - left recursion, including indirect cycles
 - repetitions or separated lists that can match nothing
 - duplicate field labels in one tagged alternative
+- in `bind`: an unknown tag or field, an unknown definition kind, or a `ref` label no `def` or `builtin` has (`grammar/bind`)
 
 Ordered choice is allowed when first sets overlap. The compiler warns (not errors) when an earlier alternative is nullable, because later alternatives are then unreachable. Cuts and predicates are evaluated in order.
 
@@ -168,4 +204,4 @@ Generated files are checked in so `tsc` sees them without a build step. `tests/g
 
 ## Self-hosting
 
-`src/grammar/grammar.parl` is the grammar language written in itself. `tests/grammar.test.ts` parses it with the bootstrap parser, compiles that grammar, parses the same file with the compiled parser, and compares the two ASTs. Bootstrap only exists to break the cycle.
+`src/grammar/grammar.parl` is the grammar language written in itself. `tests/grammar.test.ts` parses it with the bootstrap parser, compiles that grammar, parses the same file with the compiled parser, and compares the two ASTs. Bootstrap only exists to break the cycle. The `bind` block is in both parsers; a test checks that one parses to the same AST, spans included.

@@ -202,7 +202,7 @@ type Checker = {
 - `alias` registers a binding from another document as a local definition with a fresh id, keeping the defining `uri`; `imported` is shorthand for an exported name from the first dependency that provides it. `dependencies` is the read-only view the module graph supplies. See [`05-modules.md`](05-modules.md).
 - `scope` isolates bindings. `bind` adds to the current scope. Declarations are hoisted explicitly by the language (call `declare` during a pre-pass, bind during elaboration).
 - `abort` records the diagnostic and throws `AbortCheck`; `check` catches it and returns `undefined`. This gives declaration-level recovery without a monad. `abort` is for "cannot continue this unit", not for ordinary type errors; ordinary errors call `error` and return a placeholder.
-- `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens.
+- `facts` is the editor contract: diagnostics, definitions, references, typed spans, tokens, and scope extents (`scopes`, recorded by `bind`).
 
 Bindings are opaque and language-defined:
 

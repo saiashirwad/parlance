@@ -53,7 +53,7 @@ machine Order {
 ```
 
 Schema and calc add `Import` as a `Decl` alternative; machine adds it as an `Event` alternative.
-The checkers skip those nodes. Because the root rule is still `Decl*`, the incremental parser keeps
+The checkers skip those nodes. Calc and machine declare them with an `import import.specifier` line in their `bind` block, which `defineLanguage` turns into `imports`. Because the root rule is still `Decl*`, the incremental parser keeps
 working for the existing single-file examples.
 
 ## Graph
