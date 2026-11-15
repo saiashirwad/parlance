@@ -306,6 +306,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
     syntax: TypeExpr,
     parameters: ReadonlyMap<string, Type> = new Map(),
   ): Type => {
+    // A repaired parse leaves a zero-width error node where a type is missing.
+    if ((syntax as { readonly kind: string }).kind === "error") return fresh(context.level);
     switch (syntax.kind) {
       case "forall": {
         if (new Set(syntax.parameters.map((entry) => entry.text)).size !== syntax.parameters.length) {
@@ -743,6 +745,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
   };
 
   const elaborate = (expr: Base | Expr): Checked => {
+    // A repaired parse leaves a zero-width error node where an expression is missing.
+    if ((expr as { readonly kind: string }).kind === "error") return placeholder(expr.span);
     switch (expr.kind) {
       case "number": {
         const value = Number(expr.value.text);

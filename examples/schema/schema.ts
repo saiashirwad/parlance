@@ -163,7 +163,11 @@ export type SchemaModule = {
   readonly mutations: readonly MutationIR[];
 };
 
-const refValue = (ref: TypeRef): TypeRefValue => {
+/** A repaired parse leaves a zero-width `{ kind: "error" }` node where syntax is missing. */
+const isErrorNode = (node: { readonly kind: string }): boolean => node.kind === "error";
+
+const refValue = (ref: TypeRef): TypeRefValue | null => {
+  if (isErrorNode(ref)) return null;
   switch (ref.kind) {
     case "list":
       return { base: ref.type, list: true, nullable: false };
@@ -386,6 +390,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     type: SchemaType,
     attribute: Attribute,
   ): DefaultIR | undefined => {
+    if (isErrorNode(value) || (value.kind === "defaultLiteral" && isErrorNode(value.value))) return undefined;
     if (type.kind === "model") {
       cx.error("Model fields cannot have defaults", attribute);
       return undefined;
@@ -449,6 +454,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       seen.add(field.name.text);
       const resolved = refValue(field.type);
+      if (!resolved) continue;
       if (resolved.list) {
         cx.error("Fields cannot have list types", field.type);
         continue;
@@ -577,6 +583,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       paramNames.add(param.name.text);
       const resolved = refValue(param.type);
+      if (!resolved) return undefined;
       if (resolved.list) {
         cx.error("Query parameters cannot be lists", param.type);
         return undefined;
@@ -601,6 +608,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       expected: SchemaType,
       scope: ReadonlyMap<string, Binding<Checked>>,
     ): Bound | undefined => {
+      if (isErrorNode(value) || (value.kind === "literal" && isErrorNode(value.value))) return undefined;
       if (value.kind === "paramRef") {
         const name = value.value;
         const param = scope.get(name.text);
@@ -714,7 +722,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     }
 
     const declared = refValue(declaration.result);
-    const declaredBase = resolveBase(declared.base, enums, models, importedTypes, bindings, cx);
+    const declaredBase = declared && resolveBase(declared.base, enums, models, importedTypes, bindings, cx);
     const computed: ResultIR = terminal === "count"
       ? {
         type: { kind: "scalar", name: "Int" },
@@ -730,8 +738,8 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       };
 
     if (declaredBase && terminal) {
-      const same = sameType(declaredBase, computed.type) && declared.list === computed.list
-        && declared.nullable === computed.nullable;
+      const same = sameType(declaredBase, computed.type) && declared!.list === computed.list
+        && declared!.nullable === computed.nullable;
       if (!same) {
         const expected = computed.list
           ? `${computed.type.name}[]`
@@ -803,6 +811,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     };
 
     const valueOf = (value: MutationValue, field: FieldIR): Bound | undefined => {
+      if (isErrorNode(value) || (value.kind === "literal" && isErrorNode(value.value))) return undefined;
       if (value.kind === "bind") {
         const param = paramOf(value.name, field);
         return param ? { sqlName: nextSqlName(), kind: "param", name: param.name.text } : undefined;
