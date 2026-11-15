@@ -74,15 +74,18 @@ test("spans are ordered and inside the source", () => {
   walk(result.value);
 });
 
-test("recovery keeps declarations after a malformed one", () => {
+test("recovery repairs a malformed declaration in place", () => {
   const { compiled } = load(calcSource);
   const source = "let a = 1;\nlet = 2;\nlet c = 3;\n";
   const result = compiled.parse(source);
-  assert.equal(result.diagnostics.length > 0, true);
+  assert.deepEqual(result.diagnostics.map((entry) => [entry.code, entry.message]), [["parse/missing", "Expected a name"]]);
   const file = result.value as any;
   assert.equal(file.kind, "file");
-  assert.equal(file.declarations.length, 2);
-  assert.equal(file.declarations[1].name.text, "c");
+  assert.equal(file.declarations.length, 3);
+  // The missing name is a zero-width token right after "let".
+  assert.deepEqual(file.declarations[1].name, { text: "", span: { start: 14, end: 14 }, missing: true });
+  assert.equal(file.declarations[1].value.value.text, "2");
+  assert.equal(file.declarations[2].name.text, "c");
 });
 
 test("grammar checks report left recursion, nullable loops, and unused rules", () => {

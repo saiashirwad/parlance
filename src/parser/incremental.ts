@@ -6,6 +6,7 @@ import {
   type ItemRange,
   type ParseOptions,
   type ParseResult,
+  fragileAst,
   parseItemRange,
   parseSource,
   trustedAst,
@@ -387,6 +388,12 @@ export const reparse = <A>(
 
   const incremental = spec.incremental;
   if (!incremental || previous.value === null) return fallback();
+  // An item that read past its neighbour, or a repair that rolled back over
+  // items, depends on tokens the window does not re-read.
+  if (fragileAst.has(previous.value as object)) return fallback();
+  // Where the root stopped early. A reparsed item that reads that far could
+  // make a full parse roll back and repair it.
+  const stuck = previous.diagnostics.find((entry) => entry.code === "parse/unexpected");
   const trusted = trustedAst.has(previous.value as object);
   const items = itemsOf(previous.value);
   if (!items) return fallback();
@@ -485,6 +492,10 @@ export const reparse = <A>(
       break;
     }
     if (!range) return fallback();
+    // The last reparsed item may read into the first reused one, but not past it.
+    const limit = end < count - 1 ? stopTokenAt(tokens, mapEnd(items[end + 1]!.span.end)) : tokens.length;
+    if (range.reach >= limit) return fallback();
+    if (stuck && range.high >= stopTokenAt(tokens, mapOffset(stuck.span.start))) return fallback();
     if (
       stop < tokens.length - 1
       && end < count - 1
