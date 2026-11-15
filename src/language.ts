@@ -67,8 +67,11 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly exports?: (module: Ir) => readonly Binding<Type>[];
   /** TypeScript surface, with source mappings where identifiers correspond to guest text. */
   readonly typescript?: (module: Ir) => TsDoc;
-  /** ES module source for the Node loader. */
-  readonly runtime?: (module: Ir) => string;
+  /**
+   * ES module source for the Node loader. A `TsDoc` carries mappings to guest spans; the loader turns
+   * them into an inline source map so `node --enable-source-maps` shows guest positions in stacks.
+   */
+  readonly runtime?: (module: Ir) => string | TsDoc;
   /** Additional emit targets, keyed by name. */
   readonly targets?: Readonly<Record<string, (module: Ir) => Artifact>>;
   /** Hover rendering for a type. */

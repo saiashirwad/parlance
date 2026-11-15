@@ -5,7 +5,7 @@ import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
 import { defineLanguage } from "../../src/language.ts";
 import type { Span, Text } from "../../src/source.ts";
-import { source, ts } from "../../src/ts/index.ts";
+import { source, synth, ts, type TsDoc } from "../../src/ts/index.ts";
 import { TypeStore, type Type } from "../../src/types/index.ts";
 import type { BooleanLit, Decl, Expr, File, Name } from "./calc.ast.ts";
 
@@ -22,15 +22,15 @@ const reserved = new Set(
 );
 
 type CalcExpr =
-  | { readonly kind: "number"; readonly value: number }
-  | { readonly kind: "boolean"; readonly value: boolean }
-  | { readonly kind: "name"; readonly binding: Binding<Type> }
-  | { readonly kind: "binary"; readonly operator: string; readonly left: CalcExpr; readonly right: CalcExpr }
-  | { readonly kind: "prefix"; readonly operator: string; readonly operand: CalcExpr };
+  | { readonly span: Span; readonly kind: "number"; readonly value: number }
+  | { readonly span: Span; readonly kind: "boolean"; readonly value: boolean }
+  | { readonly span: Span; readonly kind: "name"; readonly binding: Binding<Type> }
+  | { readonly span: Span; readonly kind: "binary"; readonly operator: string; readonly left: CalcExpr; readonly right: CalcExpr }
+  | { readonly span: Span; readonly kind: "prefix"; readonly operator: string; readonly operand: CalcExpr };
 
 type CalcDecl =
-  | { readonly kind: "let"; readonly name: Text; readonly binding: Binding<Type>; readonly value: CalcExpr }
-  | { readonly kind: "show"; readonly value: CalcExpr };
+  | { readonly span: Span; readonly kind: "let"; readonly name: Text; readonly binding: Binding<Type>; readonly value: CalcExpr }
+  | { readonly span: Span; readonly kind: "show"; readonly value: CalcExpr };
 
 type CalcImport = {
   readonly specifier: string;
@@ -78,21 +78,21 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
     case "error": {
       // The parser reported the missing expression; error unifies with anything, so nothing cascades.
       context.result = store.error();
-      return { kind: "number", value: 0 };
+      return { span: expr.span, kind: "number", value: 0 };
     }
     case "number": {
       const value = Number(expr.value.text);
       const type = store.literal(value);
       cx.typed(expr, type);
       context.result = type;
-      return { kind: "number", value };
+      return { span: expr.span, kind: "number", value };
     }
     case "boolean": {
       const value = expr.value.text === "true";
       const type = store.literal(value);
       cx.typed(expr, type);
       context.result = type;
-      return { kind: "boolean", value };
+      return { span: expr.span, kind: "boolean", value };
     }
     case "name": {
       // `bind` resolved the name, or reported it unknown.
@@ -100,12 +100,12 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
       if (!binding) {
         const type = store.unknown();
         context.result = type;
-        return { kind: "number", value: 0 };
+        return { span: expr.span, kind: "number", value: 0 };
       }
       const type = binding.type ?? store.unknown();
       cx.typed(expr, type);
       context.result = type;
-      return { kind: "name", binding };
+      return { span: expr.span, kind: "name", binding };
     }
     case "binary": {
       const left = checkExpr(expr.left, context);
@@ -123,14 +123,14 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
         const type = boolean(store);
         cx.typed(expr, type);
         context.result = type;
-        return { kind: "binary", operator, left, right };
+        return { span: expr.span, kind: "binary", operator, left, right };
       }
       expectNumber(context, leftType, expr.left);
       expectNumber(context, rightType, expr.right);
       const type = num(store);
       cx.typed(expr, type);
       context.result = type;
-      return { kind: "binary", operator, left, right };
+      return { span: expr.span, kind: "binary", operator, left, right };
     }
     case "prefix": {
       const operand = checkExpr(expr.operand, context);
@@ -145,13 +145,13 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
       const type = operator === "!" ? boolean(store) : num(store);
       cx.typed(expr, type);
       context.result = type;
-      return { kind: "prefix", operator, operand };
+      return { span: expr.span, kind: "prefix", operator, operand };
     }
     case "postfix": {
       cx.error("Postfix operators are not defined in calc", expr);
       const type = store.unknown();
       context.result = type;
-      return { kind: "number", value: 0 };
+      return { span: expr.span, kind: "number", value: 0 };
     }
   }
 };
@@ -202,10 +202,10 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       const valueType = context.result;
       if (cx.isMissing(name)) continue;
       const binding = bound.define(declaration, valueType)!;
-      declarations.push({ kind: "let", name, binding, value });
+      declarations.push({ span: declaration.span, kind: "let", name, binding, value });
     } else {
       const value = checkExpr(declaration.value, context);
-      declarations.push({ kind: "show", value });
+      declarations.push({ span: declaration.span, kind: "show", value });
       result = value;
       resultType = context.result;
     }
@@ -231,10 +231,10 @@ export default _default;
   }`;
 };
 
-const runtime = (module: CalcModule): string => {
+/** Emits ES module text mapped to guest spans, so stacks from a running module point at the .calc file. */
+const runtime = (module: CalcModule): TsDoc => {
   const names = new Map<number, string>();
   let index = 0;
-  const lines: string[] = [];
   const temp = (binding: Binding<Type>): string => {
     const known = names.get(binding.id);
     if (known) return known;
@@ -242,20 +242,19 @@ const runtime = (module: CalcModule): string => {
     names.set(binding.id, name);
     return name;
   };
-  const expr = (value: CalcExpr): string => {
+  const expr = (value: CalcExpr): TsDoc => {
     switch (value.kind) {
       case "number":
-        return String(value.value);
       case "boolean":
-        return String(value.value);
+        return ts`${synth(String(value.value), value.span)}`;
       case "name":
-        return temp(value.binding);
-      case "binary":
-        return `(${expr(value.left)} ${value.operator === "==" ? "===" : value.operator === "!=" ? "!==" : value.operator} ${
-          expr(value.right)
-        })`;
+        return ts`${synth(temp(value.binding), value.span)}`;
+      case "binary": {
+        const operator = value.operator === "==" ? "===" : value.operator === "!=" ? "!==" : value.operator;
+        return ts`${synth("(", value.span)}${expr(value.left)} ${operator} ${expr(value.right)})`;
+      }
       case "prefix":
-        return `(${value.operator}${expr(value.operand)})`;
+        return ts`${synth(`(${value.operator}`, value.span)}${expr(value.operand)})`;
     }
   };
   const importLines = module.imports.map((group) => {
@@ -263,27 +262,28 @@ const runtime = (module: CalcModule): string => {
       const local = temp(binding);
       return exported === local ? local : `${exported} as ${local}`;
     });
-    return `import { ${pairs.join(", ")} } from ${JSON.stringify(group.specifier)};`;
+    return ts`import { ${pairs.join(", ")} } from ${JSON.stringify(group.specifier)};${"\n"}`;
   });
+  const lines: TsDoc[] = [];
   const exported: string[] = [];
   let last: string | null = null;
   let shows = 0;
   for (const declaration of module.declarations) {
     if (declaration.kind === "let") {
       const name = temp(declaration.binding);
-      lines.push(`const ${name} = ${expr(declaration.value)};`);
+      lines.push(ts`${synth("const", declaration.span)} ${name} = ${expr(declaration.value)};${"\n"}`);
       exported.push(`${name} as ${JSON.stringify(declaration.name.text)}`);
       last = name;
     } else {
       const name = `_show${shows++}`;
-      lines.push(`const ${name} = ${expr(declaration.value)};`);
-      lines.push(`console.log(${name});`);
+      lines.push(ts`${synth("const", declaration.span)} ${name} = ${expr(declaration.value)};${"\n"}`);
+      lines.push(ts`${synth("console.log", declaration.span)}(${name});${"\n"}`);
       last = name;
     }
   }
-  if (exported.length) lines.push(`export { ${exported.join(", ")} };`);
-  if (last) lines.push(`export default ${last};`);
-  return [...importLines, ...lines].join("\n") + "\n";
+  return ts`${importLines}${lines}${exported.length ? `export { ${exported.join(", ")} };${"\n"}` : ""}${
+    last ? `export default ${last};${"\n"}` : ""
+  }`;
 };
 
 export const calc = defineLanguage<File, CalcModule, Type>({

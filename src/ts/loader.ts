@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { render, site } from "../diagnostic.ts";
 import { extensionMap, type AnyLanguage } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
+import { withSourceMap } from "./sourcemap.ts";
 
 const describe = (diagnostic: Parameters<typeof render>[0], url: string, source: string): string => {
   const location = site(diagnostic, url);
@@ -31,7 +32,12 @@ export const registerLanguages = (languages: readonly AnyLanguage[]): void => {
         throw new SyntaxError(messages.join("\n"));
       }
       if (!language.runtime) throw new SyntaxError(`${language.name} has no runtime`);
-      return { format: "module", source: language.runtime(analysis.ir), shortCircuit: true };
+      const emitted = language.runtime(analysis.ir);
+      return {
+        format: "module",
+        source: typeof emitted === "string" ? emitted : withSourceMap(emitted, source, url),
+        shortCircuit: true,
+      };
     },
   });
 };

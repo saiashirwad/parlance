@@ -158,7 +158,8 @@ test("calc resolves an imported value and emits a real module import", () => {
   assert.deepEqual(analysis.diagnostics, []);
   const module = analysis.ir as CalcModule;
   assert.equal(module.imports[0]!.specifier, "./lib.calc");
-  const runtime = calc.runtime!(module);
+  const emitted = calc.runtime!(module);
+  const runtime = typeof emitted === "string" ? emitted : emitted.text;
   assert.match(runtime, /import \{ base as _v0, limit as _v1 \} from "\.\/lib\.calc";/);
   const surface = calc.typescript!(module).text;
   assert.match(surface, /export declare const total/);
@@ -211,7 +212,8 @@ test("two imports exporting the same name report at the second specifier", () =>
   const conflict = analysis.diagnostics.find((entry) => /also exports "base"/.test(entry.message));
   assert.ok(conflict, analysis.diagnostics.map((entry) => entry.message).join("\n"));
   assert.equal(analysis.source.slice(conflict.span.start, conflict.span.end), "./lib2.calc");
-  const runtime = calc.runtime!(analysis.ir as CalcModule);
+  const emitted = calc.runtime!(analysis.ir as CalcModule);
+  const runtime = typeof emitted === "string" ? emitted : emitted.text;
   assert.match(runtime, /from "\.\/lib1\.calc"/);
   assert.doesNotMatch(runtime, /from "\.\/lib2\.calc"/);
 });

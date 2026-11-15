@@ -69,6 +69,31 @@ test("calc runs through the Node loader", () => {
   assert.equal(result.stdout, "250\n250 125 true\n");
 });
 
+test("a runtime error's stack points at the .calc line under --enable-source-maps", () => {
+  const directory = mkdtempSync(join(tmpdir(), "parlance-calc-"));
+  try {
+    const guest = join(directory, "boom.calc");
+    writeFileSync(guest, "let a = 1;\nlet b = a + 2;\n\nshow b * 3;\n");
+    // calc cannot throw by itself, so a console.log that throws stands in for a failing call.
+    const explode = join(directory, "explode.mjs");
+    writeFileSync(explode, `console.log = () => { throw new Error("boom"); };\n`);
+    const consumer = join(directory, "run.mjs");
+    writeFileSync(consumer, `import(${JSON.stringify(guest)}).catch((error) => { console.error(error.stack); });\n`);
+    const run = (flag: string) =>
+      spawnSync(process.execPath, [flag, "--import", explode, "--import", join(root, "examples/register.ts"), consumer], {
+        cwd: root,
+        encoding: "utf8",
+      });
+    const mapped = run("--enable-source-maps");
+    assert.match(mapped.stderr, /Error: boom/);
+    assert.match(mapped.stderr, /boom\.calc:4:1/, mapped.stderr);
+    // Without source maps the same frame is a position in the generated module instead.
+    assert.doesNotMatch(run("--no-warnings").stderr, /boom\.calc:4:1/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("the Node loader reports guest type errors with positions", () => {
   const directory = mkdtempSync(join(tmpdir(), "parlance-calc-"));
   try {
