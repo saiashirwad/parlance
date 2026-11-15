@@ -205,9 +205,11 @@ export const check = (file: Ast.File, cx: Checker<Ty>, spec: BindSpec): ShadeMod
       if (kind === "field") return true;
       if (kind === "struct" && moduleExports.has(name.text)) {
         cx.error(`Struct ${name.text} would collide with the module's ${name.text} export; pick another name`, name);
-        return false;
+        return true;
       }
-      return reportName(name);
+      // Report a bad name but keep the binding, so its uses do not also read as unknown.
+      reportName(name);
+      return true;
     },
     builtin: (name, label) =>
       label === "type" ? { k: "type", of: builtinTypes.get(name)! } : inputs.get(name)?.type,
@@ -984,9 +986,9 @@ export const check = (file: Ast.File, cx: Checker<Ty>, spec: BindSpec): ShadeMod
         if (body.result.k === "void") {
           if (value) cx.error(body.kernel ? "A compute entry point cannot return a value" : "This function has no return type; remove the value or add -> T", node.value!);
         } else if (!value) {
-          cx.error(`Return a ${show(body.result)} value`, node);
+          cx.error(`Return a value of type ${show(body.result)}`, node);
         } else if (!accepts(body.result, value.type)) {
-          cx.error(`Expected a ${show(body.result)} return value, found ${show(value.type)}`, node.value!, convertFix(node.value!, value.type, body.result));
+          cx.error(`Expected a return value of type ${show(body.result)}, found ${show(value.type)}`, node.value!, convertFix(node.value!, value.type, body.result));
         }
         return [{ k: "return", value, span: node.span }];
       }
@@ -1030,7 +1032,7 @@ export const check = (file: Ast.File, cx: Checker<Ty>, spec: BindSpec): ShadeMod
       const statements = cx.check(() => block(item.body, body)) ?? [];
       callGraph.set(item.name.text, body.calls);
       if (signature_.result.k !== "void" && signature_.result.k !== "error" && !cx.isError(item.body) && !returns(statements)) {
-        cx.error(`${item.name.text} must return a ${show(signature_.result)} on every path`, item.name);
+        cx.error(`${item.name.text} must return a value of type ${show(signature_.result)} on every path`, item.name);
       }
       fns.push({
         name: item.name,

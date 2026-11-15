@@ -28,7 +28,9 @@ export const shade = defineLanguage<File, ShadeModule, Ty>({
   targets: {
     wgsl: (module) => ({ text: wgsl(module), fileName: "shader.wgsl" }),
   },
-  show,
+  // A struct's hover shows its layout.
+  show: (type) =>
+    type.k === "type" && type.of.k === "struct" ? `struct ${type.of.name} (size ${type.of.size}, align ${type.of.align})` : show(type),
   completions: builtinFunctions.map((name) => ({ label: name, kind: "function" as const, detail: signature(name) })),
   describe: (binding) => {
     const type = binding.type;
