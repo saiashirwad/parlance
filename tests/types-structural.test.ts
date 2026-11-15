@@ -318,3 +318,20 @@ test("unify agrees in both directions for generated pairs", () => {
     assert.equal(forward, backward);
   }
 });
+
+test("the error type unifies silently, poisons variables, and absorbs unions", () => {
+  const store = new TypeStore();
+  const error = store.error();
+  assert.equal(store.unify(error, numberType), true);
+  assert.equal(store.unify(booleanType, error), true);
+  assert.equal(store.unify(store.function(numberType, numberType), error), true);
+  const variable = store.fresh();
+  assert.equal(store.unify(variable, error), true);
+  assert.equal(store.isError(variable), true);
+  // A poisoned variable no longer conflicts with anything.
+  assert.equal(store.unify(variable, stringType), true);
+  assert.equal(store.isError(store.union([numberType, error])), true);
+  assert.equal(store.isError(numberType), false);
+  assert.equal(store.show(error), "unknown");
+  assert.equal(printType(error).text, "unknown");
+});

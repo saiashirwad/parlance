@@ -1,6 +1,8 @@
 /** A structural type. Exploration languages opt in to this store; nothing else depends on it. */
 export type Type =
   | { readonly kind: "unknown" }
+  /** Poison for a missing or broken operand: unifies with anything, absorbs unions, prints as unknown. */
+  | { readonly kind: "error" }
   | { readonly kind: "never" }
   | { readonly kind: "number" }
   | { readonly kind: "boolean" }
@@ -16,6 +18,7 @@ export type Type =
 export type PrintProblem = { readonly text: string; readonly problem: string | undefined };
 
 const UNKNOWN: Type = { kind: "unknown" };
+const ERROR: Type = { kind: "error" };
 const NEVER: Type = { kind: "never" };
 const NUMBER: Type = { kind: "number" };
 const BOOLEAN: Type = { kind: "boolean" };
@@ -64,6 +67,8 @@ const needsParens = (type: Type, context: Context): boolean => {
 
 const renderBody = (state: Renderer, type: Type): string => {
   switch (type.kind) {
+    case "error":
+      return "unknown";
     case "unknown":
     case "never":
     case "number":
@@ -162,6 +167,19 @@ export class TypeStore {
     return UNKNOWN;
   }
 
+  /**
+   * The type of a missing or broken expression. It unifies with every type (a
+   * variable unified with it becomes error too), so the parse diagnostic stays
+   * the only one; a union with an error member is error.
+   */
+  error(): Type {
+    return ERROR;
+  }
+
+  isError(type: Type): boolean {
+    return this.prune(type).kind === "error";
+  }
+
   number(): Type {
     return NUMBER;
   }
@@ -214,9 +232,11 @@ export class TypeStore {
   union(members: readonly Type[]): Type {
     const flat: Type[] = [];
     const seen = new Set<string>();
+    let poisoned = false;
     const add = (member: Type): void => {
       const value = this.prune(member);
       if (value.kind === "never") return;
+      if (value.kind === "error") poisoned = true;
       if (value.kind === "union") {
         for (const inner of value.members) add(inner);
         return;
@@ -227,6 +247,7 @@ export class TypeStore {
       flat.push(value);
     };
     for (const member of members) add(member);
+    if (poisoned) return ERROR;
     if (flat.length === 0) return NEVER;
     if (flat.length === 1) return flat[0]!;
     return { kind: "union", members: flat };
@@ -260,6 +281,11 @@ export class TypeStore {
     const l = this.#normalize(this.prune(left));
     const r = this.#normalize(this.prune(right));
     if (l === r) return true;
+    if (l.kind === "error" || r.kind === "error") {
+      if (l.kind === "variable") this.#bind(l, r);
+      if (r.kind === "variable") this.#bind(r, l);
+      return true;
+    }
     if (l.kind === "variable") {
       if (r.kind === "unknown") return true;
       return this.#bind(l, r);
@@ -416,6 +442,7 @@ export class TypeStore {
     const value = this.prune(type);
     switch (value.kind) {
       case "unknown":
+      case "error":
       case "never":
       case "number":
       case "boolean":
