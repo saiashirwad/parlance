@@ -164,6 +164,29 @@ export const refinedKinds = <T>(value: Facts<T>): Map<number, TokenKind> => {
   return exact;
 };
 
+/** LSP semantic token modifiers, as bits: a token's modifier mask is the OR of the bits it has. */
+export const tokenModifiers = ["declaration", "readonly"] as const;
+
+const modifiersCache = new WeakMap<object, Map<number, number>>();
+
+/** Modifier masks by span start: `declaration` at a local definition, `readonly` on constants and enum members. */
+export const refinedModifiers = <T>(value: Facts<T>): Map<number, number> => {
+  const cached = modifiersCache.get(value);
+  if (cached !== undefined) return cached;
+  const readonly = (kind: DefinitionKind): number => (kind === "constant" || kind === "enumMember" ? 2 : 0);
+  const byId = new Map<number, DefinitionKind>();
+  for (const definition of value.definitions) byId.set(definition.id, definition.kind);
+  const masks = new Map<number, number>();
+  for (const definition of local(value)) masks.set(definition.span.start, 1 | readonly(definition.kind));
+  for (const reference of value.references) {
+    const kind = byId.get(reference.id);
+    const mask = kind === undefined ? 0 : readonly(kind);
+    if (mask !== 0) masks.set(reference.span.start, mask);
+  }
+  modifiersCache.set(value, masks);
+  return masks;
+};
+
 /** Refines lexical tokens with declared/referenced kinds without overlapping ranges. */
 export const semanticTokens = <T>(value: Facts<T>): readonly Token[] => {
   const exact = refinedKinds(value);

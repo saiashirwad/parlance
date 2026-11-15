@@ -10,6 +10,8 @@ export {
   type Reference,
   referenceAt,
   refinedKinds,
+  refinedModifiers,
+  tokenModifiers,
   type ScopeExtent,
   semanticTokens,
   type Token,

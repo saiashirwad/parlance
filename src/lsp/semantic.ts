@@ -1,6 +1,6 @@
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { FoldingRange } from "vscode-languageserver/node";
-import { refinedKinds, type Token, type TokenKind, tokenKinds } from "../check/index.ts";
+import { refinedKinds, refinedModifiers, type Token, type TokenKind, tokenKinds } from "../check/index.ts";
 import type { Analysis } from "../language.ts";
 import type { GrammarSpec } from "../parser/spec.ts";
 import { SYMBOL, type TokenList } from "../parser/tokens.ts";
@@ -38,7 +38,7 @@ const encoder = (source: string, capacity: number) => {
       data.length = used;
       return data;
     },
-    push(start: number, end: number, type: number): void {
+    push(start: number, end: number, type: number, modifiers = 0): void {
       let at = start < 0 ? 0 : start > source.length ? source.length : start;
       const limit = end < at ? at : end > source.length ? source.length : end;
       while (lineIndex + 1 < starts.length && starts[lineIndex + 1]! <= at) lineIndex++;
@@ -57,7 +57,7 @@ const encoder = (source: string, capacity: number) => {
             data[used++] = lineIndex === line ? column - character : column;
             data[used++] = segmentEnd - at;
             data[used++] = type;
-            data[used++] = 0;
+            data[used++] = modifiers;
             line = lineIndex;
             character = column;
             previousEnd = column + (segmentEnd - at);
@@ -78,17 +78,24 @@ export const encodeTokens = (document: TextDocument, tokens: readonly Token[]): 
 };
 
 /** Encode straight from the token buffer, refining kinds from check facts. */
-export const encodeAnalysis = <Ast, Ir, Type>(document: TextDocument, analysis: Analysis<Ast, Ir, Type>): number[] => {
+export const encodeAnalysis = <Ast, Ir, Type>(
+  document: TextDocument,
+  analysis: Analysis<Ast, Ir, Type>,
+  /** Only tokens overlapping these offsets, for `semanticTokens/range`. */
+  within?: { readonly start: number; readonly end: number },
+): number[] => {
   const list = analysis.lex;
   const source = document.getText();
   const trivia = list.trivia;
   const output = encoder(source, list.length * 5 + trivia.length * 5);
   const exact = refinedKinds(analysis.facts);
+  const modifiers = refinedModifiers(analysis.facts);
+  const overlaps = (start: number, end: number): boolean => within === undefined || (end > within.start && start < within.end);
   let comment = 0;
   for (let index = 0; index < list.length; index++) {
     const start = list.start[index]!;
     while (comment < trivia.length && trivia.start[comment]! < start) {
-      if (trivia.kind[comment] === 1) {
+      if (trivia.kind[comment] === 1 && overlaps(trivia.start[comment]!, trivia.end[comment]!)) {
         output.push(trivia.start[comment]!, trivia.end[comment]!, COMMENT);
       }
       comment++;
@@ -96,11 +103,12 @@ export const encodeAnalysis = <Ast, Ir, Type>(document: TextDocument, analysis: 
     const highlight = list.highlightAt(index);
     if (highlight === 0) continue;
     const end = list.end[index]!;
+    if (!overlaps(start, end)) continue;
     const refined = exact.get(start);
-    output.push(start, end, refined === undefined ? HIGHLIGHT_CODES[highlight - 1]! : kindCode(refined));
+    output.push(start, end, refined === undefined ? HIGHLIGHT_CODES[highlight - 1]! : kindCode(refined), modifiers.get(start) ?? 0);
   }
   for (; comment < trivia.length; comment++) {
-    if (trivia.kind[comment] === 1) {
+    if (trivia.kind[comment] === 1 && overlaps(trivia.start[comment]!, trivia.end[comment]!)) {
       output.push(trivia.start[comment]!, trivia.end[comment]!, COMMENT);
     }
   }

@@ -101,7 +101,7 @@ test("the generic LSP drives calc facts and features", async () => {
   try {
     const initialize = await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
     assert.equal(initialize.result.capabilities.hoverProvider, true);
-    assert.equal(initialize.result.capabilities.semanticTokensProvider.full, true);
+    assert.deepEqual(initialize.result.capabilities.semanticTokensProvider.full, { delta: true });
     client.notify("initialized", {});
     const diagnostics = await client.open(uri, source);
     assert.deepEqual(diagnostics.params.diagnostics, []);
@@ -620,6 +620,57 @@ test("an unknown name offers a did-you-mean quick fix", async () => {
       context: { diagnostics: [] },
     });
     assert.equal(fix.result[0]?.title, 'Did you mean "count"?');
+  } finally {
+    client.close();
+  }
+});
+
+test("semantic tokens carry modifiers and support range and delta requests", async () => {
+  const client = new LspClient();
+  const target = pathToFileURL("/virtual/tokens.calc").href;
+  try {
+    const initialize = await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    const provider = initialize.result.capabilities.semanticTokensProvider;
+    assert.deepEqual(provider.legend.tokenModifiers, ["declaration", "readonly"]);
+    assert.equal(provider.range, true);
+    assert.deepEqual(provider.full, { delta: true });
+    client.notify("initialized", {});
+    await client.open(target, source);
+
+    const full = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: target } });
+    const rows = (data: number[]) => Array.from({ length: data.length / 5 }, (_, index) => data.slice(index * 5, index * 5 + 5));
+    // `x` is declared on line 0 (declaration bit) and only read on line 1 (no modifiers).
+    const declared = rows(full.result.data).find((row) => row[0] === 0 && row[2] === 1 && row[3] === 8);
+    assert.deepEqual(declared, [0, 4, 1, 8, 1]);
+    assert.ok(rows(full.result.data).some((row) => row[0] === 0 && row[1] === 5 && row[3] === 8 && row[4] === 0));
+
+    // A range request encodes only the tokens inside it, still relative to the document start.
+    const range = await client.request("textDocument/semanticTokens/range", {
+      textDocument: { uri: target },
+      range: { start: { line: 1, character: 0 }, end: { line: 2, character: 0 } },
+    });
+    assert.equal(range.result.data[0], 1);
+    assert.equal(range.result.data.length, rows(full.result.data).filter((row, index, all) =>
+      all.slice(0, index + 1).reduce((line, entry) => line + entry[0]!, 0) >= 1).length * 5);
+
+    // After an edit, a delta replaces only the changed slice of the earlier array.
+    const edited = "let x = 1 + 2;\nshow x * 33;\n";
+    client.notify("textDocument/didChange", {
+      textDocument: { uri: target, version: 2 },
+      contentChanges: [{ text: edited }],
+    });
+    await client.waitDiagnostics(target, 2);
+    const delta = await client.request("textDocument/semanticTokens/full/delta", {
+      textDocument: { uri: target },
+      previousResultId: full.result.resultId,
+    });
+    const fresh = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: target } });
+    assert.equal(delta.result.edits.length, 1);
+    const [edit] = delta.result.edits;
+    const applied = [...full.result.data];
+    applied.splice(edit.start, edit.deleteCount, ...edit.data);
+    assert.deepEqual(applied, fresh.result.data);
+    assert.ok(edit.data.length < fresh.result.data.length);
   } finally {
     client.close();
   }

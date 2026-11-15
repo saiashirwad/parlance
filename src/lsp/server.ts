@@ -29,6 +29,7 @@ import {
   referenceAt,
   type Token,
   tokenKinds,
+  tokenModifiers,
   typeAt,
 } from "../check/index.ts";
 import { type Diagnostic, diagnostic, site } from "../diagnostic.ts";
@@ -123,7 +124,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   const connection = createConnection(process.stdin, process.stdout);
   const documents = new TextDocuments(TextDocument);
   const analyses = new Map<string, ReturnType<ModuleGraph["analyze"]>>();
-  const encoded = new Map<string, number[]>();
+  /** The last full token array sent per document, for `semanticTokens/full/delta`. */
+  const encoded = new Map<string, { readonly analysis: object; readonly resultId: string; readonly data: number[]; }>();
+  let resultCounter = 0;
   const graph = new ModuleGraph({
     languages,
     read: (uri) => {
@@ -196,8 +199,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       workspaceSymbolProvider: true,
       renameProvider: true,
       semanticTokensProvider: {
-        legend: { tokenTypes: [...tokenKinds], tokenModifiers: [] },
-        full: true,
+        legend: { tokenTypes: [...tokenKinds], tokenModifiers: [...tokenModifiers] },
+        full: { delta: true },
+        range: true,
       },
     },
   }));
@@ -227,7 +231,6 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       };
     }
     analyses.set(document.uri, analysis);
-    encoded.delete(document.uri);
     void connection.sendDiagnostics({
       uri: document.uri,
       version: document.version,
@@ -497,16 +500,55 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
     return { changes };
   });
 
+  /** The full token array for the current analysis; the previous one stays reachable for deltas. */
+  const tokensFor = (document: TextDocument, analysis: NonNullable<ReturnType<typeof analysisFor>>) => {
+    const cached = encoded.get(document.uri);
+    if (cached?.analysis === analysis) return cached;
+    const entry = { analysis, resultId: String(++resultCounter), data: encodeAnalysis(document, analysis) };
+    encoded.set(document.uri, entry);
+    return entry;
+  };
+
   connection.languages.semanticTokens.on(({ textDocument }) => {
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return { data: [] };
-    let data = encoded.get(textDocument.uri);
-    if (!data) {
-      data = encodeAnalysis(document, analysis);
-      encoded.set(textDocument.uri, data);
+    const { resultId, data } = tokensFor(document, analysis);
+    return { resultId, data };
+  });
+
+  connection.languages.semanticTokens.onDelta(({ textDocument, previousResultId }) => {
+    const document = documents.get(textDocument.uri);
+    const analysis = analysisFor(textDocument.uri);
+    if (!document || !analysis) return { edits: [] };
+    const previous = encoded.get(textDocument.uri);
+    const current = tokensFor(document, analysis);
+    if (previous === undefined || previous.resultId !== previousResultId) {
+      return { resultId: current.resultId, data: current.data };
     }
-    return { data };
+    // One edit replacing the span between the common prefix and suffix.
+    const before = previous.data;
+    const after = current.data;
+    let head = 0;
+    while (head < before.length && head < after.length && before[head] === after[head]) head++;
+    let tail = 0;
+    while (tail < before.length - head && tail < after.length - head
+      && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
+    const deleteCount = before.length - head - tail;
+    const data = after.slice(head, after.length - tail);
+    return {
+      resultId: current.resultId,
+      edits: deleteCount === 0 && data.length === 0 ? [] : [{ start: head, deleteCount, data }],
+    };
+  });
+
+  connection.languages.semanticTokens.onRange(({ textDocument, range: wanted }) => {
+    const document = documents.get(textDocument.uri);
+    const analysis = analysisFor(textDocument.uri);
+    if (!document || !analysis) return { data: [] };
+    return {
+      data: encodeAnalysis(document, analysis, { start: document.offsetAt(wanted.start), end: document.offsetAt(wanted.end) }),
+    };
   });
 
   documents.listen(connection);
