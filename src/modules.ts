@@ -45,6 +45,8 @@ export type AnalyzeOptions = {
   /** An already parsed entry document, as the LSP produces after an incremental reparse. */
   readonly parsed?: ParseResult<unknown>;
   readonly incremental?: IncrementalStats | null;
+  /** The entry's language, for a URI whose path does not name one, such as an embedded snippet. */
+  readonly language?: AnyLanguage;
 };
 
 const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -122,7 +124,7 @@ export class ModuleGraph {
     if (source === null) throw new Error(`Cannot read ${id}`);
     for (const stale of this.#staleDependencies(id)) this.#invalidate(stale);
     if (existing && (existing.source !== source || options.parsed !== undefined)) this.#invalidate(id);
-    return this.#visit(id, source, [], options.incremental ?? null, options.parsed).analysis;
+    return this.#visit(id, source, [], options.incremental ?? null, options.parsed, options.language).analysis;
   }
 
   /** Dependency URIs whose backing source no longer matches the cached node. */
@@ -178,6 +180,7 @@ export class ModuleGraph {
     stack: readonly string[],
     incremental: IncrementalStats | null,
     parsed: ParseResult<unknown> | undefined,
+    entry?: AnyLanguage,
   ): ModuleNode {
     const cached = this.#nodes.get(uri);
     if (cached && cached.source === source && parsed === undefined) {
@@ -189,7 +192,7 @@ export class ModuleGraph {
     // old node and every dependent before rebuilding it.
     if (this.#nodes.has(uri)) this.#invalidate(uri);
 
-    const language = languageFor(this.#languages, uri);
+    const language = entry ?? languageFor(this.#languages, uri);
     if (!language) throw new Error(`No parlance language is registered for ${uri}`);
 
     const tree = parsed ?? language.grammar.parse(source);
