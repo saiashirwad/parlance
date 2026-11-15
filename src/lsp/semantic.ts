@@ -77,6 +77,8 @@ export const encodeTokens = (document: TextDocument, tokens: readonly Token[]): 
   return output.finish();
 };
 
+type Emit = (start: number, end: number, type: number, modifiers?: number) => void;
+
 /** Encode straight from the token buffer, refining kinds from check facts. */
 export const encodeAnalysis = <Ast, Ir, Type>(
   document: TextDocument,
@@ -84,10 +86,41 @@ export const encodeAnalysis = <Ast, Ir, Type>(
   /** Only tokens overlapping these offsets, for `semanticTokens/range`. */
   within?: { readonly start: number; readonly end: number },
 ): number[] => {
+  const output = encoder(document.getText(), analysis.lex.length * 5 + analysis.lex.trivia.length * 5);
+  emitTokens(analysis, output.push, within);
+  return output.finish();
+};
+
+/**
+ * Tokens of several analyses embedded in one document, such as snippets in a TypeScript file. Each
+ * part maps its spans into the document; parts come in document order.
+ */
+export const encodeEmbedded = (
+  document: TextDocument,
+  parts: readonly { readonly analysis: Analysis; readonly map: (start: number, end: number) => { start: number; end: number } }[],
+  within?: { readonly start: number; readonly end: number },
+): number[] => {
+  const capacity = parts.reduce((sum, part) => sum + part.analysis.lex.length * 5 + part.analysis.lex.trivia.length * 5, 0);
+  const output = encoder(document.getText(), capacity);
+  for (const { analysis, map } of parts) {
+    emitTokens(analysis, (start, end, type, modifiers) => {
+      const host = map(start, end);
+      if (within === undefined || (host.end > within.start && host.start < within.end)) {
+        output.push(host.start, host.end, type, modifiers);
+      }
+    });
+  }
+  return output.finish();
+};
+
+const emitTokens = <Ast, Ir, Type>(
+  analysis: Analysis<Ast, Ir, Type>,
+  push: Emit,
+  within?: { readonly start: number; readonly end: number },
+): void => {
   const list = analysis.lex;
-  const source = document.getText();
   const trivia = list.trivia;
-  const output = encoder(source, list.length * 5 + trivia.length * 5);
+  const output = { push };
   const exact = refinedKinds(analysis.facts);
   const modifiers = refinedModifiers(analysis.facts);
   const overlaps = (start: number, end: number): boolean => within === undefined || (end > within.start && start < within.end);
@@ -112,7 +145,6 @@ export const encodeAnalysis = <Ast, Ir, Type>(
       output.push(trivia.start[comment]!, trivia.end[comment]!, COMMENT);
     }
   }
-  return output.finish();
 };
 
 type Brackets = { readonly openers: ReadonlySet<number>; readonly closers: ReadonlyMap<number, number> };

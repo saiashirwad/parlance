@@ -675,3 +675,57 @@ test("semantic tokens carry modifiers and support range and delta requests", asy
     client.close();
   }
 });
+
+test("the LSP serves snippets inside a TypeScript buffer and nothing outside them", async () => {
+  const { readFileSync } = await import("node:fs");
+  const path = new URL("../examples/embed/app.ts", import.meta.url);
+  const source = readFileSync(path, "utf8");
+  const target = path.href;
+  const at = (text: string, needle: string, occurrence = 0) => {
+    let index = -1;
+    for (let count = 0; count <= occurrence; count++) index = text.indexOf(needle, index + 1);
+    const before = text.slice(0, index).split("\n");
+    return { line: before.length - 1, character: before.at(-1)!.length };
+  };
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    client.notify("textDocument/didOpen", { textDocument: { uri: target, languageId: "typescript", version: 1, text: source } });
+    assert.deepEqual((await client.waitDiagnostics(target, 1)).params.diagnostics, []);
+
+    // Hover on a model reference inside the schema snippet, with a range in .ts coordinates.
+    const inside = at(source, "User |>");
+    const hover = await client.request("textDocument/hover", { textDocument: { uri: target }, position: inside });
+    assert.match(hover.result.contents.value, /User/);
+    assert.deepEqual(hover.result.range, { start: inside, end: { line: inside.line, character: inside.character + 4 } });
+
+    // Outside a snippet the server stays out of the TypeScript server's way.
+    const outside = await client.request("textDocument/hover", { textDocument: { uri: target }, position: at(source, "userByEmail", 1) });
+    assert.equal(outside.result, null);
+
+    // Definition stays in the host file, at the model's name.
+    const definition = await client.request("textDocument/definition", { textDocument: { uri: target }, position: at(source, "User?") });
+    assert.equal(definition.result.uri, target);
+    assert.deepEqual(definition.result.range.start, at(source, "User {"));
+
+    // Completion inside the calc snippet offers its names.
+    const completion = await client.request("textDocument/completion", { textDocument: { uri: target }, position: at(source, "subtotal ==") });
+    assert.ok(completion.result.some((item: Message) => item.label === "subtotal"));
+
+    // Semantic tokens cover only snippet lines.
+    const tokens = await client.request("textDocument/semanticTokens/full", { textDocument: { uri: target } });
+    assert.ok(tokens.result.data.length > 0);
+    assert.equal(tokens.result.data[0], at(source, "schema Blog").line);
+
+    // A guest error in an unsaved edit is published at its .ts position.
+    const broken = source.replace("email == email", "emial == email");
+    client.notify("textDocument/didChange", { textDocument: { uri: target, version: 2 }, contentChanges: [{ text: broken }] });
+    const published = (await client.waitDiagnostics(target, 2)).params.diagnostics;
+    assert.equal(published.length, 1);
+    assert.match(published[0].message, /Unknown field "emial"/);
+    assert.deepEqual(published[0].range.start, at(broken, "emial"));
+  } finally {
+    client.close();
+  }
+});

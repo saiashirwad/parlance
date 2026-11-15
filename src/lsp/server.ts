@@ -35,10 +35,23 @@ import {
 import { type Diagnostic, diagnostic, site } from "../diagnostic.ts";
 import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
-import { analyze, extensionMap, type AnyLanguage, type CompletionKind } from "../language.ts";
+import { type Analysis, analyze, extensionMap, type AnyLanguage, type CompletionKind } from "../language.ts";
 import { ModuleGraph, type ModuleGraphOptions } from "../modules.ts";
 import { reparse, type IncrementalStats } from "../parser/incremental.ts";
-import { encodeAnalysis, folding } from "./semantic.ts";
+import {
+  analyzeSnippet,
+  duplicateKeys,
+  embedTags,
+  findSnippets,
+  type HostDiagnostic,
+  hostSpan,
+  isHostFile,
+  isSnippetUri,
+  type Snippet,
+  snippetDiagnostics,
+  toSnippet,
+} from "../ts/embed.ts";
+import { encodeAnalysis, encodeEmbedded, folding } from "./semantic.ts";
 
 const symbolKind = (definition: Definition): SymbolKind => {
   switch (definition.kind) {
@@ -99,20 +112,26 @@ const range = (document: TextDocument, span: Span): Range => ({
   end: document.positionAt(span.end),
 });
 
+const severity = (entry: { readonly severity: Diagnostic["severity"] }): DiagnosticSeverity =>
+  entry.severity === "error"
+    ? DiagnosticSeverity.Error
+    : entry.severity === "warning"
+    ? DiagnosticSeverity.Warning
+    : DiagnosticSeverity.Information;
+
 const lspDiagnostic = (document: TextDocument, entry: Diagnostic): LspDiagnostic | undefined => {
   const location = site(entry, document.uri);
   if (location.uri !== document.uri) return undefined;
   return {
     range: range(document, location.span),
-    severity: entry.severity === "error"
-      ? DiagnosticSeverity.Error
-      : entry.severity === "warning"
-      ? DiagnosticSeverity.Warning
-      : DiagnosticSeverity.Information,
+    severity: severity(entry),
     source: "parlance",
     message: entry.context?.length ? `${entry.message}\n${entry.context.join(" > ")}` : entry.message,
   };
 };
+
+/** A snippet in an open TypeScript buffer and its current analysis. */
+type Region = { readonly snippet: Snippet; readonly analysis: Analysis };
 
 export type ServerOptions = {
   readonly input?: NodeJS.ReadableStream;
@@ -127,6 +146,9 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   /** The last full token array sent per document, for `semanticTokens/full/delta`. */
   const encoded = new Map<string, { readonly analysis: object; readonly resultId: string; readonly data: number[]; }>();
   let resultCounter = 0;
+  const tags = embedTags(languages);
+  /** Snippets in open TypeScript buffers, in document order. */
+  const embedded = new Map<string, readonly Region[]>();
   const graph = new ModuleGraph({
     languages,
     ...options,
@@ -161,7 +183,7 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     const found: { uri: string; span: Span; }[] = [];
     for (const uri of graph.watched()) {
       const node = graph.node(uri);
-      if (!node) continue;
+      if (!node || isSnippetUri(uri)) continue;
       const definitions = new Map(node.analysis.facts.definitions.map((definition) => [definition.id, definition]));
       for (const reference of node.analysis.facts.references) {
         const definition = definitions.get(reference.id);
@@ -242,6 +264,55 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     });
   };
 
+  /** Finds and analyzes the snippets in a TypeScript buffer, and publishes their diagnostics. */
+  const updateEmbedded = (document: TextDocument): void => {
+    if (tags.size === 0 || !document.uri.startsWith("file:") || !isHostFile(fileURLToPath(document.uri))) return;
+    const previous = embedded.get(document.uri) ?? [];
+    const snippets = findSnippets(document.getText(), document.uri, tags);
+    const regions = snippets.map((snippet): Region => {
+      try {
+        return { snippet, analysis: analyzeSnippet(graph, snippet) };
+      } catch (cause) {
+        const failed = analyze(snippet.language, "", snippet.uri);
+        return { snippet, analysis: { ...failed, diagnostics: [diagnostic(`Internal analysis error: ${String(cause)}`, { start: 0, end: 0 })] } };
+      }
+    });
+    const kept = new Set(snippets.map((snippet) => snippet.uri));
+    for (const old of previous) if (!kept.has(old.snippet.uri)) graph.forget(old.snippet.uri);
+    if (regions.length === 0 && previous.length === 0) return;
+    embedded.set(document.uri, regions);
+    const problems: HostDiagnostic[] = [
+      ...duplicateKeys(snippets),
+      ...regions.flatMap(({ snippet, analysis }) => snippetDiagnostics(snippet, analysis)),
+    ];
+    void connection.sendDiagnostics({
+      uri: document.uri,
+      version: document.version,
+      diagnostics: problems.map((entry) => ({
+        range: range(document, entry.span),
+        severity: severity(entry),
+        source: "parlance",
+        message: entry.source?.context?.length ? `${entry.message}\n${entry.source.context.join(" > ")}` : entry.message,
+      })),
+    });
+  };
+
+  /** The snippet under a position in a TypeScript buffer, with the position in snippet offsets. */
+  const regionAt = (uri: string, position: { line: number; character: number }) => {
+    const document = documents.get(uri);
+    const regions = embedded.get(uri);
+    if (!document || !regions) return undefined;
+    const host = document.offsetAt(position);
+    for (const region of regions) {
+      const local = toSnippet(region.snippet, host);
+      if (local !== undefined) {
+        const rangeOf = (span: Span): Range => range(document, hostSpan(region.snippet, span));
+        return { document, region, local, rangeOf };
+      }
+    }
+    return undefined;
+  };
+
   const analysisFor = (uri: string): ReturnType<typeof analyze> | undefined => analyses.get(uri);
 
   /** Refresh open documents whose graph node was invalidated by another edit. */
@@ -256,15 +327,24 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
         update(document, true);
         updated = true;
       }
+      for (const [uri, regions] of embedded) {
+        const document = documents.get(uri);
+        if (!document || regions.every((region) => graph.node(region.snippet.uri)?.analysis === region.analysis)) continue;
+        updateEmbedded(document);
+        updated = true;
+      }
       if (!updated) return;
     }
   };
 
   documents.onDidChangeContent(({ document }) => {
     update(document);
+    updateEmbedded(document);
     refreshOpenDependents(document.uri);
   });
   documents.onDidClose(({ document }) => {
+    for (const region of embedded.get(document.uri) ?? []) graph.forget(region.snippet.uri);
+    embedded.delete(document.uri);
     analyses.delete(document.uri);
     encoded.delete(document.uri);
     // The graph may still hold the closed buffer's content. Drop it and
@@ -275,11 +355,21 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   });
 
   connection.onHover(({ textDocument, position }) => {
+    const inside = regionAt(textDocument.uri, position);
+    if (inside) {
+      const found = hoverAt(inside.region.analysis, inside.region.snippet.language, inside.local);
+      return found && { contents: { kind: MarkupKind.Markdown, value: found.text }, range: inside.rangeOf(found.span) };
+    }
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     const language = languageFor(textDocument.uri);
     if (!document || !analysis || !language) return null;
-    const offset = document.offsetAt(position);
+    const found = hoverAt(analysis, language, document.offsetAt(position));
+    return found && { contents: { kind: MarkupKind.Markdown, value: found.text }, range: range(document, found.span) };
+  });
+
+  /** Hover text and the span it describes, from the facts at one offset. */
+  const hoverAt = (analysis: Analysis, language: AnyLanguage, offset: number): { text: string; span: Span } | null => {
     const typed = typeAt(analysis.facts, offset);
     const definition = typed ? undefined : definitionAt(analysis.facts, offset);
     const type = typed?.type ?? definition?.type;
@@ -289,11 +379,19 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
       ?? (type !== undefined && language.show ? language.show(type) : type === undefined ? undefined : String(type));
     if (text === undefined) return null;
     const span = typed?.span ?? referenceAt(analysis.facts, offset)?.span ?? definition?.span;
-    if (!span) return null;
-    return { contents: { kind: MarkupKind.Markdown, value: text }, range: range(document, span) };
-  });
+    return span ? { text, span } : null;
+  };
 
   connection.onDefinition(({ textDocument, position }) => {
+    const inside = regionAt(textDocument.uri, position);
+    if (inside) {
+      const definition = definitionAt(inside.region.analysis.facts, inside.local);
+      const target = definition?.uri ?? inside.region.snippet.uri;
+      if (!definition) return null;
+      if (target === inside.region.snippet.uri) return { uri: textDocument.uri, range: inside.rangeOf(definition.span) };
+      const other = isSnippetUri(target) ? undefined : documentAt(target);
+      return other ? { uri: target, range: range(other, definition.span) } : null;
+    }
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return null;
@@ -351,7 +449,7 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     const found: SymbolInformation[] = [];
     for (const uri of graph.watched()) {
       const node = graph.node(uri);
-      const target = node && documentAt(uri);
+      const target = node && !isSnippetUri(uri) && documentAt(uri);
       if (!node || !target) continue;
       for (const definition of node.analysis.facts.definitions) {
         if (definition.uri !== undefined && definition.uri !== uri) continue;
@@ -403,10 +501,16 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   });
 
   connection.onCompletion(({ textDocument, position }) => {
+    const inside = regionAt(textDocument.uri, position);
+    if (inside) return completionsAt(inside.region.analysis, inside.region.snippet.language, inside.local, inside.region.snippet.text);
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     const language = languageFor(textDocument.uri);
     if (!document || !analysis || !language) return [];
+    return completionsAt(analysis, language, document.offsetAt(position), document.getText());
+  });
+
+  const completionsAt = (analysis: Analysis, language: AnyLanguage, offset: number, text: string) => {
     const items: {
       label: string;
       kind: CompletionItemKind;
@@ -415,7 +519,6 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
       filterText?: string;
       sortText?: string;
     }[] = [];
-    const offset = document.offsetAt(position);
     for (const keyword of language.grammar.spec.keywords) {
       items.push({ label: keyword, kind: CompletionItemKind.Keyword, detail: "keyword" });
     }
@@ -447,10 +550,10 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
       seen.add(item.label);
       return true;
     });
-    const linePrefix = document.getText().slice(Math.max(0, offset - 64), offset);
+    const linePrefix = text.slice(Math.max(0, offset - 64), offset);
     if (/@[A-Za-z0-9_]*$/.test(linePrefix)) return unique.filter((item) => item.label.startsWith("@"));
     return unique;
-  });
+  };
 
   /** Types of variable and constant bindings, from the facts hover uses. Needs `language.show`. */
   connection.languages.inlayHint.on(({ textDocument, range: wanted }) => {
@@ -510,7 +613,21 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
     return entry;
   };
 
+  /** Tokens for the snippets in a TypeScript buffer; nothing outside them. */
+  const embeddedTokens = (uri: string, within?: Span): number[] | undefined => {
+    const document = documents.get(uri);
+    const regions = embedded.get(uri);
+    if (!document || !regions) return undefined;
+    return encodeEmbedded(
+      document,
+      regions.map(({ snippet, analysis }) => ({ analysis, map: (start: number, end: number) => hostSpan(snippet, { start, end }) })),
+      within,
+    );
+  };
+
   connection.languages.semanticTokens.on(({ textDocument }) => {
+    const tokens = embeddedTokens(textDocument.uri);
+    if (tokens) return { resultId: String(++resultCounter), data: tokens };
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return { data: [] };
@@ -519,6 +636,8 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   });
 
   connection.languages.semanticTokens.onDelta(({ textDocument, previousResultId }) => {
+    const tokens = embeddedTokens(textDocument.uri);
+    if (tokens) return { resultId: String(++resultCounter), data: tokens };
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return { edits: [] };
@@ -544,6 +663,9 @@ export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGra
   });
 
   connection.languages.semanticTokens.onRange(({ textDocument, range: wanted }) => {
+    const host = documents.get(textDocument.uri);
+    const tokens = host && embeddedTokens(textDocument.uri, { start: host.offsetAt(wanted.start), end: host.offsetAt(wanted.end) });
+    if (tokens) return { data: tokens };
     const document = documents.get(textDocument.uri);
     const analysis = analysisFor(textDocument.uri);
     if (!document || !analysis) return { data: [] };
