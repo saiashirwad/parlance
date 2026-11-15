@@ -433,6 +433,8 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
           captures: inner.captures,
         };
       }
+      case "error":
+        return { expr: { t: "cut", first: EMPTY_BITS, nullable: true, span: unary.span }, captures: false };
       default:
         return internals(unary, seen);
     }
@@ -463,6 +465,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
 
   const lowerBody = (body: Body, seen: Set<Primary>): PExpr => {
     if (body.kind === "alternatives") return lowerAlternatives(body.alts, seen);
+    if (body.kind === "error") return lowerAlternatives([], seen);
     const levels: PrecLevel[] = body.levels.map((level, index) => {
       const assoc = text(level.assoc);
       if (!["left", "right", "none", "prefix", "postfix"].includes(assoc)) {
@@ -1044,7 +1047,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
   };
   const inspectBody = (body: Body): void => {
     if (body.kind === "alternatives") inspectTags(body.alts);
-    else {
+    else if (body.kind === "precedence") {
       for (const level of body.levels) for (const operator of level.operators) inspectUnaryTags(operator, inspectTags);
       inspectTags(body.atom);
     }

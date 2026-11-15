@@ -74,12 +74,12 @@ const expectNumber = (context: ExprContext, type: Type, at: Spanned): void => {
 
 const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
   const { cx, store } = context;
-  // A repaired parse leaves a zero-width error node where an expression is missing.
-  if ((expr as { readonly kind: string }).kind === "error") {
-    context.result = store.unknown();
-    return { kind: "number", value: 0 };
-  }
   switch (expr.kind) {
+    case "error": {
+      // The parser reported the missing expression; error unifies with anything, so nothing cascades.
+      context.result = store.error();
+      return { kind: "number", value: 0 };
+    }
     case "number": {
       const value = Number(expr.value.text);
       const type = store.literal(value);
@@ -201,6 +201,7 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       }
       const value = checkExpr(declaration.value, context);
       const valueType = context.result;
+      if (cx.isMissing(name)) continue;
       const binding = cx.declare(name.text, name.span, "variable", valueType);
       cx.bind(binding);
       cx.typed(name, valueType);

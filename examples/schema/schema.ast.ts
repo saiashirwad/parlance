@@ -2,7 +2,9 @@
 
 export type Span = { readonly start: number; readonly end: number };
 
-export type Text = { readonly text: string; readonly span: Span };
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export interface FileSchemaNode {
   readonly kind: "schema";
@@ -73,7 +75,8 @@ export interface TypeRefOptionalNode {
 export type TypeRef =
   | TypeRefListNode
   | TypeRefOptionalNode
-  | Base;
+  | Base
+  | ErrorNode;
 
 export interface BaseNameNode {
   readonly kind: "name";
@@ -108,7 +111,8 @@ export interface DefaultValueDefaultLiteralNode {
 
 export type DefaultValue =
   | DefaultValueDefaultNameNode
-  | DefaultValueDefaultLiteralNode;
+  | DefaultValueDefaultLiteralNode
+  | ErrorNode;
 
 export interface QueryQueryNode {
   readonly kind: "query";
@@ -223,7 +227,8 @@ export interface MutationValueNameNode {
 export type MutationValue =
   | MutationValueBindNode
   | MutationValueLiteralNode
-  | MutationValueNameNode;
+  | MutationValueNameNode
+  | ErrorNode;
 
 export interface StageWhereNode {
   readonly kind: "where";
@@ -271,7 +276,8 @@ export interface ValueLiteralNode {
 
 export type Value =
   | ValueParamRefNode
-  | ValueLiteralNode;
+  | ValueLiteralNode
+  | ErrorNode;
 
 export interface LiteralNumberNode {
   readonly kind: "number";
@@ -321,6 +327,7 @@ export interface TerminalCountNode {
 export type Terminal =
   | TerminalFirstNode
   | TerminalAllNode
-  | TerminalCountNode;
+  | TerminalCountNode
+  | ErrorNode;
 
 export type Name = Text;

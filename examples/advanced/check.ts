@@ -281,7 +281,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
 
   const at = (value: Span | { readonly span: Span }): Span => "start" in value ? value : value.span;
 
-  const error = (message: string, value: Span | { readonly span: Span }): void => cx.error(message, at(value));
+  // Pass the node itself: the checker drops a report at a missing token or error node.
+  const error = (message: string, value: Span | { readonly span: Span }): void => cx.error(message, value);
 
   const typed = (value: Span | { readonly span: Span }, type: Type): void => cx.typed(at(value), type);
 
@@ -306,9 +307,10 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
     syntax: TypeExpr,
     parameters: ReadonlyMap<string, Type> = new Map(),
   ): Type => {
-    // A repaired parse leaves a zero-width error node where a type is missing.
-    if ((syntax as { readonly kind: string }).kind === "error") return fresh(context.level);
     switch (syntax.kind) {
+      // The parser reported the missing type; a fresh variable unifies with anything.
+      case "error":
+        return fresh(context.level);
       case "forall": {
         if (new Set(syntax.parameters.map((entry) => entry.text)).size !== syntax.parameters.length) {
           error("Duplicate forall parameter", syntax);
@@ -432,6 +434,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
   };
 
   const elaborateField = (recordValue: Checked, name: Name): Checked => {
+    // `record.` with the name missing: the parser reported it.
+    if (cx.isMissing(name)) return placeholder(spanFrom(recordValue.span.start, name.span.end));
     const fieldType = fresh(context.level);
     const tail = freshRow([name.text], context.level);
     const expected = record(row(new Map([[name.text, fieldType]]), tail));
@@ -745,9 +749,10 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
   };
 
   const elaborate = (expr: Base | Expr): Checked => {
-    // A repaired parse leaves a zero-width error node where an expression is missing.
-    if ((expr as { readonly kind: string }).kind === "error") return placeholder(expr.span);
     switch (expr.kind) {
+      // The parser reported the missing expression.
+      case "error":
+        return placeholder(expr.span);
       case "number": {
         const value = Number(expr.value.text);
         if (!Number.isFinite(value)) error("Number literal is too large", expr);

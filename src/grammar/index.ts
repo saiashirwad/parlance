@@ -1,3 +1,4 @@
+export type { ErrorNode } from "../source.ts";
 export {
   type Alternative,
   type Alternatives,

@@ -150,7 +150,7 @@ Missing syntax gets a placeholder shaped like what the rule produces:
 | optional | `null` |
 | item of a separated list (`f(1, , 2)`) | left out of the list |
 
-Diagnostics are `parse/missing` ("Expected ...", on the last character before the gap) and `parse/skipped` ("Unexpected ...", on the skipped tokens). Checkers must accept `kind: "error"` wherever a node can be missing.
+Diagnostics are `parse/missing` ("Expected ...", on the last character before the gap) and `parse/skipped` ("Unexpected ...", on the skipped tokens). The generated AST types include `ErrorNode` exactly in the unions that can hold one, so checkers must handle `kind: "error"` there; see [Handle error nodes](04-authoring.md#handle-error-nodes).
 
 If repair fails too, the item is skipped as before: the farthest expected set is reported once (`parse/recover`) and the parser skips to the next token in the item's sync set at delimiter depth zero.
 
@@ -158,7 +158,7 @@ When the root loop stops on a token no item can start with, an earlier item prob
 
 ## Typed ASTs
 
-`generateTypes(file)` emits TypeScript interfaces for every tagged alternative and a union per rule. Tags are named `<Rule><Tag>Node` to keep same-named tags in different rules distinct. Precedence rules get `<Rule>BinaryNode`, `<Rule>PrefixNode`, and `<Rule>PostfixNode`.
+`generateTypes(file)` emits TypeScript interfaces for every tagged alternative and a union per rule. Tags are named `<Rule><Tag>Node` to keep same-named tags in different rules distinct. Precedence rules get `<Rule>BinaryNode`, `<Rule>PrefixNode`, and `<Rule>PostfixNode`. Unions that repair can fill with an error node also include `ErrorNode`, and `Text` has an optional `missing: true`.
 
 ```sh
 node src/grammar/cli.ts gen examples/calc/calc.parl examples/calc/calc.ast.ts

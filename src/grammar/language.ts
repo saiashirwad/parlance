@@ -85,6 +85,8 @@ const check = (file: GrammarFile, cx: Checker<GrammarType>): GrammarModule => {
       case "opt":
         walkPrimary(unary.expr);
         return;
+      case "error":
+        return;
       default:
         walkPrimary(unary);
     }
@@ -131,6 +133,7 @@ const check = (file: GrammarFile, cx: Checker<GrammarType>): GrammarModule => {
       walkAlternatives(body.alts);
       return;
     }
+    if (body.kind === "error") return;
     for (const level of body.levels) for (const operator of level.operators) walkUnary(operator);
     walkAlternatives(body.atom);
   };

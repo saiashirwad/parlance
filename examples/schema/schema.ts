@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type Binding, type Checker } from "../../src/check/index.ts";
+import { type Binding, type Checker, isError } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
 import { defineLanguage, importSpecifier } from "../../src/language.ts";
@@ -163,12 +163,11 @@ export type SchemaModule = {
   readonly mutations: readonly MutationIR[];
 };
 
-/** A repaired parse leaves a zero-width `{ kind: "error" }` node where syntax is missing. */
-const isErrorNode = (node: { readonly kind: string }): boolean => node.kind === "error";
-
+/** `null` for a type the parser reported missing. */
 const refValue = (ref: TypeRef): TypeRefValue | null => {
-  if (isErrorNode(ref)) return null;
   switch (ref.kind) {
+    case "error":
+      return null;
     case "list":
       return { base: ref.type, list: true, nullable: false };
     case "optional":
@@ -390,7 +389,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     type: SchemaType,
     attribute: Attribute,
   ): DefaultIR | undefined => {
-    if (isErrorNode(value) || (value.kind === "defaultLiteral" && isErrorNode(value.value))) return undefined;
+    if (isError(value)) return undefined;
     if (type.kind === "model") {
       cx.error("Model fields cannot have defaults", attribute);
       return undefined;
@@ -608,7 +607,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       expected: SchemaType,
       scope: ReadonlyMap<string, Binding<Checked>>,
     ): Bound | undefined => {
-      if (isErrorNode(value) || (value.kind === "literal" && isErrorNode(value.value))) return undefined;
+      if (isError(value)) return undefined;
       if (value.kind === "paramRef") {
         const name = value.value;
         const param = scope.get(name.text);
@@ -662,6 +661,8 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     }
 
     let terminal: "first" | "all" | "count" | null = null;
+    // `|>` with a missing terminal: the parser reported it, so do not ask for one again.
+    let missingTerminal = false;
     let limit: StageIR | null = null;
     const stages: StageIR[] = [];
     declaration.stages.forEach((stage, index) => {
@@ -710,6 +711,10 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
           if (index !== declaration.stages.length - 1) {
             cx.error("The terminal must be the last stage", stage);
           }
+          if (isError(stage.terminal)) {
+            missingTerminal = true;
+            break;
+          }
           terminal = stage.terminal.kind;
           stages.push({ kind: "terminal", terminal });
           break;
@@ -717,7 +722,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
     });
 
-    if (!terminal) {
+    if (!terminal && !missingTerminal) {
       cx.error("A query needs a terminal stage: first, all, or count", declaration.name);
     }
 
@@ -811,7 +816,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     };
 
     const valueOf = (value: MutationValue, field: FieldIR): Bound | undefined => {
-      if (isErrorNode(value) || (value.kind === "literal" && isErrorNode(value.value))) return undefined;
+      if (isError(value)) return undefined;
       if (value.kind === "bind") {
         const param = paramOf(value.name, field);
         return param ? { sqlName: nextSqlName(), kind: "param", name: param.name.text } : undefined;

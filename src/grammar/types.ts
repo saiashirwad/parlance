@@ -1,5 +1,7 @@
 import { type Diagnostic, error, sortDiagnostics, warning } from "../diagnostic.ts";
+import { sharedSequenceSpans } from "../parser/parse.ts";
 import type { Alternative, Body, GrammarFile, Item, Primary, Rule, Unary } from "./ast.ts";
+import { compileGrammar } from "./compile.ts";
 
 /** The result of deriving TypeScript declarations for a grammar. */
 export type Generated = { readonly text: string; readonly diagnostics: readonly Diagnostic[] };
@@ -20,7 +22,8 @@ type FixedNode = {
 };
 
 const helpSpan = "export type Span = { readonly start: number; readonly end: number };";
-const helpText = "export type Text = { readonly text: string; readonly span: Span };";
+const helpText = "export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };";
+const helpError = "export type ErrorNode = { readonly kind: \"error\"; readonly span: Span };";
 
 /** Type-position words that cannot name a declaration in TypeScript. */
 const reservedTypeNames = new Set([
@@ -104,7 +107,7 @@ const reservedTypeNames = new Set([
   "yield",
 ]);
 
-const helperNames = new Set(["Span", "Text"]);
+const helperNames = new Set(["Span", "Text", "ErrorNode"]);
 
 const unique = (values: readonly string[]): string[] => {
   const seen = new Set<string>();
@@ -149,6 +152,7 @@ const capturesOfUnary = (unary: Unary): boolean => {
   switch (unary.kind) {
     case "and":
     case "not":
+    case "error":
       return false;
     case "star":
     case "plus":
@@ -177,6 +181,144 @@ const capturesOfPrimary = (primary: Primary): boolean => {
     case "sepEnd1":
       return capturesOfUnary(primary.item);
   }
+};
+
+/** What a repair parse stands in for a missing value; mirrors `missing` in src/parser/parse.ts. */
+type StandIn = "error" | "text" | "list" | "null" | "tuple";
+
+/**
+ * The rules and groups whose value a repair parse can replace with an error node.
+ * A repaired item (one after `~` or a literal in its sequence) that is missing
+ * becomes a zero-width `{ kind: "error" }` where its value is a tagged node, a
+ * precedence expression, or a choice of mixed shapes; a precedence operand after
+ * an operator does too. The error belongs to the rule or group that owns that
+ * value. `shared` holds the spans of sequences whose literal does not commit
+ * (see `sharedSequenceSpans`); without it every literal commits.
+ */
+const errorSites = (
+  rules: ReadonlyMap<string, Rule>,
+  shared: ReadonlySet<string> | null,
+): ReadonlySet<Rule | Primary> => {
+  const sites = new Set<Rule | Primary>();
+  const standing = new Map<Rule, StandIn>();
+
+  const standInOfAlternatives = (alternatives: readonly Alternative[]): StandIn => {
+    if (alternatives.length === 1) return standInOfAlternative(alternatives[0]!);
+    const shapes = alternatives.map(standInOfAlternative);
+    for (const shape of ["text", "list", "null"] as const) if (shapes.every((value) => value === shape)) return shape;
+    return "error";
+  };
+  const standInOfAlternative = (alternative: Alternative): StandIn => {
+    if (alternative.tag !== null) return "error";
+    const captured = alternative.items.filter(capturesOfItem);
+    if (captured.length === 0) return "null";
+    if (captured.length === 1) return standInOfUnary(captured[0]!.expr);
+    return "tuple";
+  };
+  const standInOfRule = (rule: Rule): StandIn => {
+    const known = standing.get(rule);
+    if (known !== undefined) return known;
+    // A cycle hits the parser's depth cap, which gives an error node.
+    standing.set(rule, "error");
+    const body = rule.body;
+    const value = body.kind === "precedence" ? "error" : body.kind === "error" ? "null" : standInOfAlternatives(body.alts);
+    standing.set(rule, value);
+    return value;
+  };
+  const standInOfUnary = (unary: Unary): StandIn => {
+    switch (unary.kind) {
+      case "star":
+      case "plus":
+      case "sep":
+      case "sep1":
+      case "sepEnd":
+      case "sepEnd1":
+        return "list";
+      case "opt":
+      case "and":
+      case "not":
+      case "cut":
+      case "error":
+        return "null";
+      case "lit":
+      case "word":
+      case "token":
+      case "re":
+        return "text";
+      case "group":
+        return standInOfAlternatives(unary.alts);
+      case "ref": {
+        const target = rules.get(unary.name.text);
+        return target === undefined ? "null" : standInOfRule(target);
+      }
+    }
+  };
+
+  const visited = new Set<Rule>();
+  const markAlternatives = (alternatives: readonly Alternative[], owner: Rule | Primary): void => {
+    if (alternatives.length === 1) return markAlternative(alternatives[0]!, owner);
+    if (standInOfAlternatives(alternatives) === "error") sites.add(owner);
+  };
+  const markAlternative = (alternative: Alternative, owner: Rule | Primary): void => {
+    if (alternative.tag !== null) {
+      sites.add(owner);
+      return;
+    }
+    for (const item of alternative.items) if (capturesOfItem(item)) markUnary(item.expr);
+  };
+  const markUnary = (unary: Unary): void => {
+    if (unary.kind === "group") return markAlternatives(unary.alts, unary);
+    if (unary.kind !== "ref") return;
+    const target = rules.get(unary.name.text);
+    if (target === undefined || visited.has(target)) return;
+    visited.add(target);
+    if (target.body.kind === "precedence") sites.add(target);
+    else if (target.body.kind === "alternatives") markAlternatives(target.body.alts, target);
+  };
+
+  const repairable = (alternative: Alternative): void => {
+    const commits = shared === null || !shared.has(`${alternative.span.start}:${alternative.span.end}`);
+    let committed = false;
+    for (const item of alternative.items) {
+      if (committed && capturesOfItem(item)) markUnary(item.expr);
+      if (item.expr.kind === "cut" || (item.expr.kind === "lit" && commits)) committed = true;
+      walkUnary(item.expr);
+    }
+  };
+  const walkUnary = (unary: Unary): void => {
+    switch (unary.kind) {
+      case "and":
+      case "not":
+      case "star":
+      case "plus":
+      case "opt":
+        return walkUnary(unary.expr);
+      case "group":
+        for (const alternative of unary.alts) repairable(alternative);
+        return;
+      case "sep":
+      case "sep1":
+      case "sepEnd":
+      case "sepEnd1":
+        walkUnary(unary.item);
+        walkUnary(unary.separator);
+        return;
+      default:
+        return;
+    }
+  };
+
+  for (const rule of rules.values()) {
+    if (rule.body.kind === "precedence") {
+      // An operator commits: a missing operand is an error node.
+      if (rule.body.levels.some((level) => level.assoc.text !== "postfix")) sites.add(rule);
+      for (const alternative of rule.body.atom) repairable(alternative);
+      for (const level of rule.body.levels) for (const operator of level.operators) walkUnary(operator);
+    } else if (rule.body.kind === "alternatives") {
+      for (const alternative of rule.body.alts) repairable(alternative);
+    }
+  }
+  return sites;
 };
 
 const renderInterface = (name: string, tag: string, fields: readonly Field[]): string => {
@@ -262,6 +404,9 @@ export const generateTypes = (file: GrammarFile): Generated => {
     usedNames.add(name);
     ruleTypes.set(raw, name);
   }
+
+  const compiled = compileGrammar(file);
+  const erroring = errorSites(rules, compiled.valid ? sharedSequenceSpans(compiled.spec) : null);
 
   const shapes = new Map<string, NodeShape[]>();
   const nodeOrder: NodeShape[] = [];
@@ -351,8 +496,10 @@ export const generateTypes = (file: GrammarFile): Generated => {
         }
         return [target];
       }
-      case "group":
-        return primary.alts.flatMap((alternative) => valueOfAlternative(alternative, rule));
+      case "group": {
+        const members = primary.alts.flatMap((alternative) => valueOfAlternative(alternative, rule));
+        return erroring.has(primary) ? unique([...members, "ErrorNode"]) : members;
+      }
       case "sep":
       case "sep1":
       case "sepEnd":
@@ -365,6 +512,7 @@ export const generateTypes = (file: GrammarFile): Generated => {
     switch (unary.kind) {
       case "and":
       case "not":
+      case "error":
         return ["null"];
       case "star":
       case "plus":
@@ -393,6 +541,7 @@ export const generateTypes = (file: GrammarFile): Generated => {
 
   const membersOf = (body: Body, rule: string): readonly string[] => {
     if (body.kind === "alternatives") return valueOfAlternatives(body.alts, rule);
+    if (body.kind === "error") return [];
     const binary = allocateName(
       `${rule}BinaryNode`,
       body.span,
@@ -420,7 +569,8 @@ export const generateTypes = (file: GrammarFile): Generated => {
   const membersByRule = new Map<string, readonly string[]>();
   for (const rule of rules.values()) {
     const raw = rule.name.text;
-    membersByRule.set(raw, membersOf(rule.body, raw));
+    const members = membersOf(rule.body, raw);
+    membersByRule.set(raw, erroring.has(rule) ? [...members, "ErrorNode"] : members);
   }
 
   const ruleByTypeName = new Map<string, string>();
@@ -476,6 +626,7 @@ export const generateTypes = (file: GrammarFile): Generated => {
     `// Generated by parlance from ${file.name.text}. Do not edit.`,
     helpSpan,
     helpText,
+    helpError,
   ];
 
   for (const rule of rules.values()) {

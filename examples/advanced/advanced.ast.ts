@@ -2,7 +2,9 @@
 
 export type Span = { readonly start: number; readonly end: number };
 
-export type Text = { readonly text: string; readonly span: Span };
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export interface FileFileNode {
   readonly kind: "file";
@@ -77,7 +79,8 @@ export type TypeExpr =
   | TypeExprForallNode
   | TypeExprArrowNode
   | TypeAtomTypeRecordNode
-  | TypeAtomTypeNameNode;
+  | TypeAtomTypeNameNode
+  | ErrorNode;
 
 export interface TypeAtomTypeRecordNode {
   readonly kind: "typeRecord";
@@ -96,7 +99,8 @@ export type TypeAtom =
   | TypeAtomTypeRecordNode
   | TypeAtomTypeNameNode
   | TypeExprForallNode
-  | TypeExprArrowNode;
+  | TypeExprArrowNode
+  | ErrorNode;
 
 export type TypeArguments = readonly TypeExpr[];
 
@@ -136,7 +140,8 @@ export type Expr =
   | Base
   | ExprBinaryNode
   | ExprPrefixNode
-  | ExprPostfixNode;
+  | ExprPostfixNode
+  | ErrorNode;
 
 export interface PostfixPostfixNode {
   readonly kind: "postfix";

@@ -1,4 +1,4 @@
-import type { Span, Text } from "../source.ts";
+import type { ErrorNode, Span, Text } from "../source.ts";
 
 /** The surface AST of a `.parl` grammar file. Every parser produces exactly these shapes. */
 export type GrammarFile = {
@@ -33,7 +33,8 @@ export type Rule = {
   readonly span: Span;
 };
 
-export type Body = Precedence | Alternatives;
+/** A repair parse leaves an error node for a missing body or operand (`rule A = ;`, `a:&`). */
+export type Body = Precedence | Alternatives | ErrorNode;
 
 export type Alternatives = {
   readonly kind: "alternatives";
@@ -72,7 +73,8 @@ export type Level = {
 export type Unary =
   | { readonly kind: "and" | "not"; readonly expr: Unary; readonly span: Span }
   | { readonly kind: "star" | "plus" | "opt"; readonly expr: Primary; readonly span: Span }
-  | Primary;
+  | Primary
+  | ErrorNode;
 
 export type Primary =
   | { readonly kind: "lit"; readonly text: Text; readonly span: Span }

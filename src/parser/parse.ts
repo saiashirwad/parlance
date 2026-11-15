@@ -176,6 +176,14 @@ const headSeqs = (spec: GrammarSpec, expr: PExpr, out: Set<SeqExpr>, seen: Set<P
   return out;
 };
 
+/**
+ * The spans of sequences whose matched literal does not commit them in repair,
+ * because a later sibling alternative can start the same way. The type
+ * generator uses it to place error nodes exactly.
+ */
+export const sharedSequenceSpans = (spec: GrammarSpec): ReadonlySet<string> =>
+  new Set([...repairOf(spec).shared].map((seq) => `${seq.span.start}:${seq.span.end}`));
+
 const repairOf = (spec: GrammarSpec): GrammarRepair => {
   const found = grammarRepairs.get(spec);
   if (found) return found;
