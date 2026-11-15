@@ -52,7 +52,7 @@ export type BindEntry =
   | {
     readonly kind: "unique";
     readonly paths: readonly BindPath[];
-    readonly owner: Text;
+    readonly owners: readonly Text[];
     readonly message: Text | null;
     readonly span: Span;
   };

@@ -117,7 +117,8 @@ export const defineLanguage = <Ast, Ir, Type = unknown>(
 ): Language<Ast, Ir, Type> => {
   const spec = language.grammar.bind;
   if (!spec) return language;
-  const builtins = spec.builtins.map((entry): Completion => ({
+  const explicit = new Set((language.completions ?? []).map((completion) => completion.label));
+  const builtins = spec.builtins.filter((entry) => !explicit.has(entry.name)).map((entry): Completion => ({
     label: entry.name,
     kind: completionOf(entry.kind),
     detail: entry.label,

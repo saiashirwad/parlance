@@ -44,3 +44,16 @@ rule Binding = {
 };
 
 rule Name = { word };
+
+bind {
+  import import.specifier
+  builtin Int, String, Bool, DateTime: type "scalar"
+  def machine.name: namespace
+  export def event.name: event "event"
+  def field.name: property "payload field" in event
+  export def initial.name, state.name, final.name: class "state"
+  ref transition.event: event
+  ref transition.target: state
+  ref field.type: scalar "payload type"
+  unique transition.event in initial, state "State {owner} already handles {name}"
+}

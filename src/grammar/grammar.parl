@@ -90,7 +90,7 @@ rule BindEntry = {
   | @builtin "builtin" ~ names:sep1(Name, ",") ":" type:Name label:$String?
   | @def exported:"export"? "def" ~ paths:sep1(BindPath, ",") ":" type:Name label:$String? visibility:Visibility?
   | @ref "ref" ~ paths:sep1(BindPath, ",") ":" label:Name noun:$String?
-  | @unique "unique" ~ paths:sep1(BindPath, ",") "in" owner:Name message:$String?
+  | @unique "unique" ~ paths:sep1(BindPath, ",") "in" owners:sep1(Name, ",") message:$String?
 };
 rule BindPath = { @path node:Name field:BindField? };
 rule BindField = { "." name:Name };

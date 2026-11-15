@@ -1326,10 +1326,11 @@ const compileBind = (block: Bind, file: GrammarFile, diagnostics: Diagnostic[]):
         break;
       }
       case "unique": {
-        if (!tag(entry.owner)) break;
+        const owners = entry.owners.filter(tag).map(text);
+        if (owners.length < entry.owners.length) break;
         for (const value of entry.paths) {
           const resolved = path(value);
-          if (resolved) spec.uniques.push({ ...resolved, owner: entry.owner.text, message: string(entry.message) });
+          if (resolved) spec.uniques.push({ ...resolved, owners, message: string(entry.message) });
         }
         break;
       }

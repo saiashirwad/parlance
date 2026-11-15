@@ -27,7 +27,8 @@ export type BindRef = { readonly node: string; readonly field: string; readonly 
 export type BindUnique = {
   readonly node: string;
   readonly field: string;
-  readonly owner: string;
+  /** Repeats are counted per nearest enclosing node of one of these kinds. */
+  readonly owners: readonly string[];
   readonly message: string | null;
 };
 export type BindBuiltin = {
@@ -63,11 +64,11 @@ const isNode = (value: unknown): value is Node =>
   typeof value === "object" && value !== null && typeof (value as Node).kind === "string";
 const isText = (value: unknown): value is Text =>
   typeof value === "object" && value !== null && typeof (value as Text).text === "string";
-/** The names a field holds: one text, a list of texts, or nothing. Missing names are skipped. */
-const texts = (value: unknown): readonly Text[] => {
-  const list = Array.isArray(value) ? value : [value];
-  return list.filter((entry): entry is Text => isText(entry) && entry.text !== "" && entry.missing !== true);
-};
+/** The names a field holds: one text, a list of texts, or nothing. */
+const allTexts = (value: unknown): readonly Text[] => (Array.isArray(value) ? value : [value]).filter(isText);
+const isMissingName = (name: Text): boolean => name.text === "" || name.missing === true;
+/** Present names only: a missing name, from a repaired parse, was already reported. */
+const texts = (value: unknown): readonly Text[] => allTexts(value).filter((name) => !isMissingName(name));
 const extent = (value: unknown, fallback: Span): Span => {
   const list = (Array.isArray(value) ? value : [value]).filter((entry) =>
     typeof entry === "object" && entry !== null && "span" in entry
@@ -156,8 +157,8 @@ class Walker<T> {
     leave?.(value);
   }
 
-  nearest(kind: string): Frame<T> | undefined {
-    return this.frames.findLast((frame) => frame.node.kind === kind);
+  nearest(...kinds: readonly string[]): Frame<T> | undefined {
+    return this.frames.findLast((frame) => kinds.includes(frame.node.kind));
   }
 }
 
@@ -211,26 +212,31 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
   const sites = new Map<Text, Entry<T>>();
   const foreign = new Map<Text, Binding<T>>();
   const builtinSites = new Map<Text, string>();
-  const owned = new Map<object, Map<string, Entry<T>>>();
+  const owned = new Map<object, { readonly names: Map<string, Entry<T>>; readonly list: Entry<T>[] }>();
   const used = new Set<number>();
   const repeats = new Set<Text>();
   const exported: Entry<T>[] = [];
   const own = new Set<number>();
+  /** Nodes whose definition was a duplicate; like a skipped declaration, their subtree is not resolved. */
+  const rejected = new Set<object>();
+  let skipping = 0;
   const scopes: Scope<T>[] = [];
   const walker = new Walker<T>(spec, { start: 0, end: cx.source.length }, (scope) => scopes.push(scope));
 
   walker.walk(root, (node) => {
     for (const def of defs.get(node.kind) ?? []) {
       let names: Map<string, Entry<T>>;
+      let members: Entry<T>[] | null = null;
       let detail = def.detail;
       let scope: Scope<T> | null = null;
       if (def.owner !== null) {
         const owner = walker.nearest(def.owner);
         if (!owner) continue;
-        let members = owned.get(owner.node);
-        if (!members) owned.set(owner.node, members = new Map());
-        names = members;
-        detail = texts(owner.node["name"])[0]?.text ?? detail;
+        let group = owned.get(owner.node);
+        if (!group) owned.set(owner.node, group = { names: new Map(), list: [] });
+        names = group.names;
+        members = group.list;
+        detail = allTexts(owner.node["name"])[0]?.text ?? detail;
       } else if (def.within !== null) {
         const frame = node.kind === def.within.node
           ? { node, scope: walker.scope }
@@ -242,10 +248,19 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         scope = walker.scope;
         names = scope.names;
       }
-      for (const name of texts(node[def.field])) {
+      for (const name of allTexts(node[def.field])) {
         const top = scope === walker.root;
+        if (isMissingName(name)) {
+          // Like `cx.declare`, a missing name gets an unrecorded binding and is never in scope.
+          const binding = cx.declare("", name.span, def.kind, typeOf(node), detail === null ? {} : { detail });
+          const entry: Entry<T> = { binding, index: -1, node, def, from: 0, sites: [] };
+          entries.set(node, entry);
+          members?.push(entry);
+          continue;
+        }
         if (names.has(name.text) || (top && fallback(name.text, name) !== undefined)) {
           cx.error(`Duplicate ${def.owner === null ? "name" : def.label} ${quote(name.text)}`, name);
+          rejected.add(node);
           continue;
         }
         const type = typeOf(node);
@@ -256,6 +271,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         const from = def.after ? node.span.end : 0;
         const entry: Entry<T> = { binding, index: cx.facts.definitions.length - 1, node, def, from, sites: [] };
         names.set(name.text, entry);
+        members?.push(entry);
         own.add(binding.id);
         entries.set(node, entry);
         if (def.exported) exported.push(entry);
@@ -274,8 +290,36 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
 
   const seen = new Map<object, Set<string>>();
   walker.walk(root, (node) => {
+    if (rejected.has(node)) skipping++;
+    if (skipping > 0) return;
+    // After a repeat, a missing name, or an unknown name, later references in the same node are not
+    // reported: `on nope -> Z` says only that `nope` is unknown, and a repaired parse does not cascade.
+    let quiet = false;
+    for (const unique of uniques.get(node.kind) ?? []) {
+      const owner = walker.nearest(...unique.owners);
+      if (!owner) continue;
+      let names = seen.get(owner.node);
+      if (!names) seen.set(owner.node, names = new Set());
+      for (const site of texts(node[unique.field])) {
+        if (!names.has(site.text)) {
+          names.add(site.text);
+          continue;
+        }
+        repeats.add(site);
+        quiet = true;
+        const ownerName = allTexts(owner.node["name"])[0]?.text ?? owner.node.kind;
+        const message = unique.message === null
+          ? `Duplicate ${quote(site.text)} in ${owner.node.kind} ${ownerName}`
+          : unique.message.replaceAll("{owner}", ownerName).replaceAll("{name}", quote(site.text));
+        cx.error(message, site);
+      }
+    }
     for (const ref of refs.get(node.kind) ?? []) {
-      for (const site of texts(node[ref.field])) {
+      for (const site of allTexts(node[ref.field])) {
+        if (isMissingName(site)) {
+          quiet = true;
+          continue;
+        }
         const found = lookup(ref, site);
         if (found) {
           cx.reference(found.binding, site);
@@ -300,27 +344,12 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
           builtinSites.set(site, builtin.name);
           continue;
         }
-        cx.error(`Unknown ${ref.noun} ${quote(site.text)}`, site);
+        if (!quiet) cx.error(`Unknown ${ref.noun} ${quote(site.text)}`, site);
+        quiet = true;
       }
     }
-    for (const unique of uniques.get(node.kind) ?? []) {
-      const owner = walker.nearest(unique.owner);
-      if (!owner) continue;
-      let names = seen.get(owner.node);
-      if (!names) seen.set(owner.node, names = new Set());
-      for (const site of texts(node[unique.field])) {
-        if (!names.has(site.text)) {
-          names.add(site.text);
-          continue;
-        }
-        repeats.add(site);
-        const ownerName = texts(owner.node["name"])[0]?.text ?? unique.owner;
-        const message = unique.message === null
-          ? `Duplicate ${quote(site.text)} in ${unique.owner} ${ownerName}`
-          : unique.message.replaceAll("{owner}", ownerName).replaceAll("{name}", quote(site.text));
-        cx.error(message, site);
-      }
-    }
+  }, (node) => {
+    if (rejected.has(node)) skipping--;
   });
 
   return {
@@ -328,13 +357,14 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
     resolved: (site) => sites.get(site)?.binding ?? foreign.get(site),
     target: <N>(site: Text) => sites.get(site)?.node as N | undefined,
     builtin: (site) => builtinSites.get(site),
-    members: <N>(node: object) => [...owned.get(node)?.values() ?? []].map((entry) => entry.node as N),
+    members: <N>(node: object) => (owned.get(node)?.list ?? []).map((entry) => entry.node as N),
     used: (binding) => used.has(binding.id),
     duplicate: (site) => repeats.has(site),
     define: (node, type) => {
       const entry = entries.get(node);
       if (!entry) return undefined;
       entry.binding = { ...entry.binding, type };
+      if (entry.index < 0) return entry.binding;
       cx.facts.definitions[entry.index] = entry.binding;
       cx.typed(entry.binding.span, type);
       for (const site of entry.sites) cx.typed(site, type);

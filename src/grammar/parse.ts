@@ -335,9 +335,13 @@ class Bootstrap {
       this.advance();
       const paths = this.bindPaths();
       this.takeWord("in");
-      const owner = this.text();
+      const owners = [this.text()];
+      while (this.atSymbol(",")) {
+        this.advance();
+        owners.push(this.text());
+      }
       const message = string();
-      return { kind: "unique", paths, owner, message, span: end() };
+      return { kind: "unique", paths, owners, message, span: end() };
     }
     return this.fail(`Expected a bind entry, found ${JSON.stringify(this.current.text)}`);
   }
