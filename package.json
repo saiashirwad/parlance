@@ -16,6 +16,9 @@
     "./ts/host": "./src/ts/host.ts",
     "./ts/loader": "./src/ts/loader.ts",
     "./lsp": "./src/lsp/server.ts",
+    "./lsp/core": "./src/lsp/core.ts",
+    "./lsp/browser": "./src/lsp/browser.ts",
+    "./host": "./src/host-env.ts",
     "./runtime": "./src/runtime/index.ts"
   },
   "scripts": {
@@ -38,6 +41,7 @@
   "devDependencies": {
     "@parlance/ts-host": "workspace:*",
     "@types/node": "^26.1.1",
+    "esbuild": "^0.28.2",
     "typescript": "7.1.0-beta"
   },
   "engines": {
