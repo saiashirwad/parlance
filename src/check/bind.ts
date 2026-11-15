@@ -241,6 +241,11 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
   const scopes: Scope<T>[] = [];
   const walker = new Walker<T>(spec, { start: 0, end: cx.source.length }, (scope) => scopes.push(scope));
 
+  /** Nodes the resolve pass visits, in tree order, with the state the walk had at each. */
+  const pending: Node[] = [];
+  const pendingScopes: Scope<T>[] = [];
+  const pendingOwners: (readonly (Node | undefined)[] | null)[] = [];
+
   walker.walk(root, (node) => {
     for (const def of defs.get(node.kind) ?? empty) {
       let names: Map<string, Entry<T>>;
@@ -300,10 +305,20 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         if (scope !== null) cx.visible(binding.id, { start: Math.max(from, scope.span.start), end: scope.span.end });
       }
     }
+    // Only nodes with references or uniques need the resolve pass, and not inside a rejected definition.
+    if (rejected.size > 0 && rejected.has(node)) skipping++;
+    if (skipping > 0) return;
+    const nodeUniques = uniques.get(node.kind);
+    if (nodeUniques === undefined && !refs.has(node.kind)) return;
+    pending.push(node);
+    pendingScopes.push(walker.scope);
+    pendingOwners.push(nodeUniques === undefined ? null : nodeUniques.map((unique) => walker.nearest(...unique.owners)?.node));
+  }, (node) => {
+    if (rejected.size > 0 && rejected.has(node)) skipping--;
   });
 
-  const lookup = (ref: BindRef, site: Text): Entry<T> | undefined => {
-    for (let at: Scope<T> | null = walker.scope; at; at = at.parent) {
+  const lookup = (ref: BindRef, site: Text, from: Scope<T>): Entry<T> | undefined => {
+    for (let at: Scope<T> | null = from; at; at = at.parent) {
       const entry = at.names.get(site.text);
       if (entry && entry.def.label === ref.label && entry.from <= site.span.start) return entry;
     }
@@ -311,9 +326,9 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
   };
 
   /** Names a reference at `site` could have meant: what `lookup` sees, plus builtins of its kind. */
-  const candidates = (ref: BindRef, site: Text): string[] => {
+  const candidates = (ref: BindRef, site: Text, from: Scope<T>): string[] => {
     const names: string[] = [];
-    for (let at: Scope<T> | null = walker.scope; at; at = at.parent) {
+    for (let at: Scope<T> | null = from; at; at = at.parent) {
       for (const [name, entry] of at.names) if (entry.def.label === ref.label && entry.from <= site.span.start) names.push(name);
     }
     for (const entry of spec.builtins) if (entry.label === ref.label) names.push(entry.name);
@@ -321,17 +336,20 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
   };
 
   const seen = new Map<object, Set<string>>();
-  walker.walk(root, (node) => {
-    if (rejected.has(node)) skipping++;
-    if (skipping > 0) return;
+  for (let at = 0; at < pending.length; at++) {
+    const node = pending[at]!;
+    const scope = pendingScopes[at]!;
+    const owners = pendingOwners[at];
     // After a repeat, a missing name, or an unknown name, later references in the same node are not
     // reported: `on nope -> Z` says only that `nope` is unknown, and a repaired parse does not cascade.
     let quiet = false;
-    for (const unique of uniques.get(node.kind) ?? empty) {
-      const owner = walker.nearest(...unique.owners);
+    const nodeUniques = uniques.get(node.kind) ?? empty;
+    for (let index = 0; index < nodeUniques.length; index++) {
+      const unique = nodeUniques[index]!;
+      const owner = owners?.[index];
       if (!owner) continue;
-      let names = seen.get(owner.node);
-      if (!names) seen.set(owner.node, names = new Set());
+      let names = seen.get(owner);
+      if (!names) seen.set(owner, names = new Set());
       for (const site of texts(node[unique.field])) {
         if (!names.has(site.text)) {
           names.add(site.text);
@@ -339,9 +357,9 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         }
         repeats.add(site);
         quiet = true;
-        const ownerName = allTexts(owner.node["name"])[0]?.text ?? owner.node.kind;
+        const ownerName = allTexts(owner["name"])[0]?.text ?? owner.kind;
         const message = unique.message === null
-          ? `Duplicate ${quote(site.text)} in ${owner.node.kind} ${ownerName}`
+          ? `Duplicate ${quote(site.text)} in ${owner.kind} ${ownerName}`
           : unique.message.replaceAll("{owner}", ownerName).replaceAll("{name}", quote(site.text));
         cx.error(message, site);
       }
@@ -352,7 +370,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
           quiet = true;
           continue;
         }
-        const found = lookup(ref, site);
+        const found = lookup(ref, site, scope);
         if (found) {
           cx.reference(found.binding, site);
           if (found.binding.type !== undefined) cx.typed(site, found.binding.type);
@@ -376,13 +394,11 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
           builtinSites.set(site, builtin.name);
           continue;
         }
-        if (!quiet) cx.unknown(ref.noun, site.text, site, candidates(ref, site));
+        if (!quiet) cx.unknown(ref.noun, site.text, site, candidates(ref, site, scope));
         quiet = true;
       }
     }
-  }, (node) => {
-    if (rejected.has(node)) skipping--;
-  });
+  }
 
   return {
     binding: (node) => entries.get(node)?.binding,
