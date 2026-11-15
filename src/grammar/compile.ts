@@ -125,7 +125,43 @@ const bitmap = (characters: string): Uint8Array => {
   return result;
 };
 
+/** True when `source` has an unescaped top-level `|`, so a later alternative may start with another character. */
+const hasAlternation = (source: string): boolean => {
+  let inClass = false;
+  let depth = 0;
+  for (let index = 0; index < source.length; index++) {
+    const character = source[index];
+    if (character === "\\") index++;
+    else if (inClass) inClass = character !== "]";
+    else if (character === "[") inClass = true;
+    else if (character === "(") depth++;
+    else if (character === ")") depth--;
+    else if (character === "|" && depth === 0) return true;
+  }
+  return false;
+};
+
+/** The length of the first atom (`\\d`, `[...]`, `x`), or -1 when it is a group. */
+const firstAtomLength = (source: string): number => {
+  if (source.startsWith("(")) return -1;
+  if (source.startsWith("\\")) return 2;
+  if (source.startsWith("[")) {
+    for (let index = 1; index < source.length; index++) {
+      if (source[index] === "\\") index++;
+      else if (source[index] === "]") return index + 1;
+    }
+    return -1;
+  }
+  return 1;
+};
+
+/**
+ * Characters a match can start with, or null when unsure. Sound only for a pattern whose first
+ * atom is required and that has no top-level alternation, so anything else gets null.
+ */
 const firstChars = (source: string): Uint8Array | null => {
+  const atom = firstAtomLength(source);
+  if (atom < 0 || hasAlternation(source) || /^[?*]|^\{0[,}]/.test(source.slice(atom))) return null;
   if (source.startsWith("\\d") || source.startsWith("[0-9") || source.startsWith("[\\d")) {
     return bitmap("0123456789");
   }

@@ -54,3 +54,20 @@ rule File = { word };
     [["word", "a"], ["error", " "], ["word", "b"], ["eof", ""]],
   );
 });
+
+test("a token pattern with alternation, a group, or an optional first atom lexes every alternative", () => {
+  const grammar = compile(`
+grammar Numbers
+skip /\\s+/
+token Hex /0x[0-9a-f]+|\\d+/
+token Group /(?:#|%)[a-z]+/
+token Signed /-?[a-z]+/
+root File
+rule File = { items:(hex:$Hex | group:$Group | signed:$Signed)* };
+`);
+  const tokens = grammar.lex("0x1f 42 #ab %cd -ef gh").toArray();
+  assert.deepEqual(
+    tokens.map((token) => [token.kind, token.text]),
+    [["token", "0x1f"], ["token", "42"], ["token", "#ab"], ["token", "%cd"], ["token", "-ef"], ["token", "gh"], ["eof", ""]],
+  );
+});
