@@ -1,6 +1,7 @@
 /**
  * The example languages and the files each one opens with, read from `examples/` at build time.
- * A `.js` file is a driver: plain JavaScript that imports the guest files and runs them.
+ * A `.ts` file is TypeScript that imports the guest files, from `examples/typescript/` with its
+ * imports pointed at the flat file set; it is what Run executes.
  */
 import advancedMain from "../../../examples/advanced/main.advanced?raw";
 import advancedStdlib from "../../../examples/advanced/stdlib.advanced?raw";
@@ -13,6 +14,11 @@ import machineOrder from "../../../examples/machine/order.machine?raw";
 import schemaBlog from "../../../examples/schema/blog.schema?raw";
 import schemaCatalog from "../../../examples/schema/catalog.schema?raw";
 import shadeParticles from "../../../examples/shade/particles.gpu?raw";
+import advancedTs from "../../../examples/typescript/advanced.ts?raw";
+import calcTs from "../../../examples/typescript/calc.ts?raw";
+import catalogTs from "../../../examples/typescript/catalog.ts?raw";
+import machineTs from "../../../examples/typescript/machine.ts?raw";
+import shadeTs from "../../../examples/typescript/shade.ts?raw";
 
 export type ExampleFile = { readonly name: string; readonly text: string };
 
@@ -22,41 +28,36 @@ export type Example = {
   readonly files: readonly ExampleFile[];
   /** The file Run executes when the active tab is not runnable. */
   readonly entry: string;
+  /** The file "Run on WebGPU" executes. */
+  readonly gpu?: string;
   /** How Run behaves: run modules, show that it needs Node, or nothing to run. */
   readonly run: "module" | "node" | "none";
 };
 
-const machineDriver = `import { start } from "./order.machine";
+/** The repository's TypeScript example, importing from the playground's flat file set. */
+const flat = (text: string): string => text.replace(/"\.\.\/[a-z]+\//g, '"./');
 
-// The machine's runtime: send events, read the state.
-const order = start();
-console.log("start", order.state);
-console.log("pay 25 ->", order.send({ type: "pay", amount: 25 }));
-console.log("pay 50 ->", order.send({ type: "pay", amount: 50 }));
-console.log("edit   ->", order.send({ type: "edit" }));
-console.log("state", order.state, "last", order.lastEvent?.type);
-`;
-
-const shadeDriver = `import * as kernel from "./particles.gpu";
-import { Particle, Params } from "./particles.gpu";
+const shadeGpu = `import * as kernel from "./particles.gpu";
+import { type Particle, Particle as Layout, Params } from "./particles.gpu";
 import { device, dispatch } from "playground";
 
 // Struct layouts follow WGSL rules: vec3f aligns to 16 bytes.
-console.log("Particle", Particle.size, "bytes; velocity at", Particle.fields.velocity.offset);
+console.log("Particle", Layout.size, "bytes; velocity at", Layout.fields.velocity.offset);
 console.log("Params", Params.size, "bytes; gravity at", Params.fields.gravity.offset);
 
-const particles = Particle.packArray([
+const start: Particle[] = [
   { position: [0, 1, 0], velocity: [1, 0, 0], color: [1, 0.5, 0, 1], age: 0 },
   { position: [0, 0.05, 0], velocity: [0, -2, 0], color: [0, 0.5, 1, 1], age: 1.5 },
-]);
+];
+const particles = Layout.packArray(start);
 const params = Params.pack({ dt: 0.1, gravity: [0, -9.8, 0], drag: 0.5, lifetime: 2 });
 
-// One step: 1 workgroup of 64 invocations, on the CPU or on WebGPU.
+// One step on WebGPU: the emitted WGSL, the same packed buffers, read back in place.
 await dispatch(kernel, "simulate", 1, { params, particles });
 console.log("ran on", device);
 
-const round = (values) => values.map((value) => value.toFixed(3)).join(" ");
-for (const p of Particle.unpackArray(particles)) {
+const round = (values: readonly number[]) => values.map((value) => value.toFixed(3)).join(" ");
+for (const p of Layout.unpackArray(particles)) {
   console.log("particle", round(p.position), "|", round(p.velocity), "| alpha", p.color[3].toFixed(3));
 }
 `;
@@ -69,8 +70,9 @@ export const examples: readonly Example[] = [
       { name: "demo.calc", text: calcDemo },
       { name: "imports.calc", text: calcImports },
       { name: "lib.calc", text: calcLib },
+      { name: "calc.ts", text: flat(calcTs) },
     ],
-    entry: "demo.calc",
+    entry: "calc.ts",
     run: "module",
   },
   {
@@ -80,8 +82,9 @@ export const examples: readonly Example[] = [
       { name: "main.advanced", text: advancedMain },
       { name: "stdlib.advanced", text: advancedStdlib },
       { name: "trees.advanced", text: advancedTrees },
+      { name: "advanced.ts", text: flat(advancedTs) },
     ],
-    entry: "main.advanced",
+    entry: "advanced.ts",
     run: "module",
   },
   {
@@ -90,8 +93,9 @@ export const examples: readonly Example[] = [
     files: [
       { name: "catalog.schema", text: schemaCatalog },
       { name: "blog.schema", text: schemaBlog },
+      { name: "catalog.ts", text: flat(catalogTs) },
     ],
-    entry: "catalog.schema",
+    entry: "catalog.ts",
     run: "node",
   },
   {
@@ -99,9 +103,9 @@ export const examples: readonly Example[] = [
     label: "machine",
     files: [
       { name: "order.machine", text: machineOrder },
-      { name: "run.js", text: machineDriver },
+      { name: "machine.ts", text: flat(machineTs) },
     ],
-    entry: "run.js",
+    entry: "machine.ts",
     run: "module",
   },
   {
@@ -109,9 +113,11 @@ export const examples: readonly Example[] = [
     label: "shade",
     files: [
       { name: "particles.gpu", text: shadeParticles },
-      { name: "run.js", text: shadeDriver },
+      { name: "shade.ts", text: flat(shadeTs) },
+      { name: "webgpu.ts", text: shadeGpu },
     ],
-    entry: "run.js",
+    entry: "shade.ts",
+    gpu: "webgpu.ts",
     run: "module",
   },
   {
@@ -125,4 +131,5 @@ export const examples: readonly Example[] = [
 
 export const uriOf = (example: Example, name: string): string => `file:///${example.id}/${name}`;
 
-export const isDriver = (name: string): boolean => name.endsWith(".js");
+export const isDriver = (name: string): boolean => name.endsWith(".ts");
+

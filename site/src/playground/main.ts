@@ -15,6 +15,8 @@ import { type Example, examples, isDriver, uriOf } from "./examples.ts";
 import { connect, messageText, type PublishedDiagnostics } from "./lsp.ts";
 import type { RunMessage, RunModule, RunRequest } from "./run-worker.ts";
 import { readHash, writeHash } from "./share.ts";
+import { tsClient } from "./ts-client.ts";
+import type { TsDoc } from "../../../src/ts/template.ts";
 import { editorTheme, highlight } from "./theme.ts";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -40,6 +42,8 @@ let active = example.files[0]!.name;
 const views = new Map<string, EditorView>();
 const problems = new Map<string, readonly lsp.Diagnostic[]>();
 let emitted: { uri: string; result: EmitResult } | null = null;
+/** Each guest file's last TypeScript surface, for mapping TypeScript definitions back. */
+const surfaces = new Map<string, TsDoc>();
 
 const setStatus = (state: "starting" | "ready" | "error", text: string) => {
   statusLine.dataset.state = state;
@@ -65,8 +69,58 @@ const client: LSPClient = connect(lspWorker, {
     problems.set(uri, diagnostics);
     renderProblems();
     scheduleEmit();
+    scheduleSurfaces();
   },
 });
+
+// ---- TypeScript ------------------------------------------------------------------------------
+
+/** A tab's path in the TypeScript worker; a guest file's surface is its path plus `.ts`. */
+const tsPath = (name: string): string => `/${example.id}/${name}`;
+
+const ts = tsClient({
+  jump: (path, offset) => {
+    const prefix = `/${example.id}/`;
+    if (!path.startsWith(prefix)) return;
+    const file = path.slice(prefix.length);
+    const guest = file.replace(/\.ts$/, "");
+    if (views.has(guest) && !isDriver(guest)) {
+      // A surface offset maps back to the guest span it came from, as the content mapper does.
+      const mapping = surfaces.get(guest)?.mappings.find(([start, length]) => offset >= start && offset < start + length);
+      const target = mapping ? mapping[2] + Math.min(offset - mapping[0], Math.max(mapping[3] - 1, 0)) : 0;
+      return focus(guest, target);
+    }
+    if (views.has(file)) focus(file, offset);
+  },
+});
+
+const focus = (name: string, offset: number) => {
+  select(name);
+  const view = views.get(name)!;
+  view.dispatch({ selection: { anchor: Math.min(offset, view.state.doc.length) }, scrollIntoView: true });
+  view.focus();
+};
+
+/** Refreshes every guest surface in the TypeScript worker, then re-checks the `.ts` tabs. */
+const syncSurfaces = async () => {
+  const guests = example.files.filter((file) => !isDriver(file.name)).map((file) => file.name);
+  const results = await Promise.all(guests.map((name) => emit(name).catch(() => null)));
+  const files: Record<string, string> = {};
+  guests.forEach((name, index) => {
+    const surface = results[index]?.typescript;
+    if (!surface) return;
+    surfaces.set(name, surface);
+    files[`${tsPath(name)}.ts`] = surface.text;
+  });
+  await ts.call("files", { files });
+  ts.recheck();
+};
+
+let surfaceTimer = -1;
+const scheduleSurfaces = () => {
+  clearTimeout(surfaceTimer);
+  surfaceTimer = window.setTimeout(() => void syncSurfaces(), 150);
+};
 
 // ---- editors ---------------------------------------------------------------------------------
 
@@ -101,7 +155,7 @@ const editorFor = (name: string, text: string): EditorView => {
         lintGutter(),
         editorTheme,
         highlight,
-        isDriver(name) ? javascript() : client.plugin(uri, example.id),
+        isDriver(name) ? ts.extension(tsPath(name)) : client.plugin(uri, example.id),
         EditorView.updateListener.of((update) => {
           if (!update.docChanged) return;
           texts.get(example.id)!.set(name, update.state.doc.toString());
@@ -133,7 +187,8 @@ const load = async (next: Example) => {
   emitted = null;
   example = next;
   languageSelect.value = next.id;
-  gpuButton.hidden = !(next.id === "shade" && "gpu" in navigator);
+  gpuButton.hidden = !(next.gpu && "gpu" in navigator);
+  surfaces.clear();
   runButton.disabled = next.run === "none";
   const files = texts.get(next.id)!;
   // Every file is in memory before any opens, so the first analysis already resolves imports.
@@ -243,7 +298,7 @@ const refreshOutputs = async () => {
   targetSelect.value = chosen;
   targetSelect.disabled = targets.length < 2;
   renderEmit(failed);
-  setText(tsView, failed ?? result.typescript ?? `// ${example.label} has no TypeScript surface.\n`, javascript({ typescript: true }));
+  setText(tsView, result.typescript?.text ?? failed ?? `// ${example.label} has no TypeScript surface.\n`, javascript({ typescript: true }));
 };
 
 const renderEmit = (failed: string | null = null) => {
@@ -268,7 +323,7 @@ const print = (text: string, className = "line") => {
 
 let running: Worker | null = null;
 
-const run = async (device: RunRequest["device"]) => {
+const run = async (device: RunRequest["device"], driver?: string) => {
   running?.terminate();
   running = null;
   showPanel("run");
@@ -278,7 +333,7 @@ const run = async (device: RunRequest["device"]) => {
     return;
   }
   const guests = example.files.filter((file) => !isDriver(file.name)).map((file) => file.name);
-  const entryName = isDriver(example.entry) || !guests.includes(active) ? example.entry : active;
+  const entryName = driver ?? (isDriver(active) ? active : example.entry);
   const results = await Promise.all((isDriver(entryName) ? guests : [entryName]).map(emit)).catch((cause) => {
     print(String(cause), "error");
     return null;
@@ -302,7 +357,10 @@ const run = async (device: RunRequest["device"]) => {
     for (const module of result.modules) if (module.code !== null) modules.set(module.uri, { ...module, code: module.code });
   }
   const entry = uriOf(example, entryName);
-  if (isDriver(entryName)) modules.set(entry, { uri: entry, language: "js", code: texts.get(example.id)!.get(entryName)! });
+  if (isDriver(entryName)) {
+    await ts.call("files", { files: { [tsPath(entryName)]: texts.get(example.id)!.get(entryName)! } });
+    modules.set(entry, { uri: entry, language: "js", code: await ts.call("transpile", { path: tsPath(entryName) }) });
+  }
   const worker = new Worker(new URL("./run-worker.ts", import.meta.url), { type: "module" });
   running = worker;
   const timer = window.setTimeout(() => {
@@ -326,7 +384,7 @@ const run = async (device: RunRequest["device"]) => {
 };
 
 runButton.addEventListener("click", () => void run("cpu"));
-gpuButton.addEventListener("click", () => void run("webgpu"));
+gpuButton.addEventListener("click", () => void run("webgpu", example.gpu));
 
 // ---- output tabs, split, sharing -------------------------------------------------------------
 

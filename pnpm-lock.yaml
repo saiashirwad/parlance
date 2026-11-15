@@ -72,6 +72,9 @@ importers:
       codemirror:
         specifier: ^6.0.2
         version: 6.0.2
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
       vscode-languageserver-protocol:
         specifier: ^3.18.5
         version: 3.18.5
@@ -1527,6 +1530,11 @@ packages:
 
   tslib@2.9.1:
     resolution: {integrity: sha512-a4Ux9VKuIMHsOS7ENbEq6hK2ZGYIT27Rtl0E4eD9KqwxhKiQeMZE/9xb3IdYwWaSOyIBQLExhQgXDTYoiCxnWA==}
+
+  typescript@6.0.3:
+    resolution: {integrity: sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw==}
+    engines: {node: '>=14.17'}
+    hasBin: true
 
   typescript@7.1.0-beta:
     resolution: {integrity: sha512-cjWjZAJDsmZzsNC5GwHNlW0YPM65jZa5oR0KyQcYX3KSVIfTvtBq//vewISyatKk4OLi5grZjHhIVE9fdrw1UQ==}
@@ -3106,6 +3114,8 @@ snapshots:
 
   tslib@2.9.1:
     optional: true
+
+  typescript@6.0.3: {}
 
   typescript@7.1.0-beta:
     optionalDependencies:
