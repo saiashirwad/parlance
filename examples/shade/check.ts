@@ -118,6 +118,9 @@ export type ShadeModule = {
   readonly kernels: readonly KernelDecl[];
 };
 
+/** Names every shade module exports besides its structs. */
+const moduleExports: ReadonlySet<string> = new Set(["wgsl", "bindings", "entryPoints", "dispatch"]);
+
 /** Builtin inputs a compute entry point can read, and their WGSL builtin names. */
 export const inputs: ReadonlyMap<string, { readonly type: Ty; readonly wgsl: string }> = new Map([
   ["global_id", { type: vec(3, "u32"), wgsl: "global_invocation_id" }],
@@ -197,7 +200,15 @@ export const check = (file: Ast.File, cx: Checker<Ty>, spec: BindSpec): ShadeMod
     return false;
   };
   const bound: Bound<Ty> = bind(file, cx, spec, {
-    accept: (name, node) => (node as { kind: string }).kind === "field" || reportName(name),
+    accept: (name, node) => {
+      const kind = (node as { kind: string }).kind;
+      if (kind === "field") return true;
+      if (kind === "struct" && moduleExports.has(name.text)) {
+        cx.error(`Struct ${name.text} would collide with the module's ${name.text} export; pick another name`, name);
+        return false;
+      }
+      return reportName(name);
+    },
     builtin: (name, label) =>
       label === "type" ? { k: "type", of: builtinTypes.get(name)! } : inputs.get(name)?.type,
   });
