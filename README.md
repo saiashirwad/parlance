@@ -4,7 +4,7 @@ Parlance is a toolkit for small languages that live inside TypeScript and Node. 
 
 ## Playground
 
-Try it in the browser: [https://parlance-playground-playground-prod-nqlnnblm3h53vp6c.texoport.workers.dev](https://parlance-playground-playground-prod-nqlnnblm3h53vp6c.texoport.workers.dev). It runs the language server and the TypeScript checker in workers, no backend. Locally: `pnpm site:dev`. Deploy: `pnpm site:deploy` (alchemy, Cloudflare).
+Try it in the browser: [https://parlance.texoport.in](https://parlance.texoport.in). It runs the language server and the TypeScript checker in workers, no backend. Locally: `pnpm site:dev`. Deploy: `pnpm site:deploy` (alchemy, Cloudflare).
 
 ## Requirements
 

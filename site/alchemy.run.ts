@@ -14,7 +14,9 @@ export default Alchemy.Stack(
     const site = yield* Cloudflare.Website.StaticSite("Playground", {
       command: "pnpm build",
       outdir: "dist",
+      domain: "parlance.texoport.in",
+      workersDev: true,
     });
-    return { url: site.url };
+    return { url: site.url, urls: site.urls };
   }),
 );
