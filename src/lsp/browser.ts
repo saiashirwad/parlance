@@ -2,6 +2,7 @@ import { BrowserMessageReader, BrowserMessageWriter, type Connection, createConn
 import type { ModuleGraphOptions, ModuleNode } from "../graph.ts";
 import { type HostEnv, memoryHost } from "../host-env.ts";
 import type { AnyLanguage } from "../language.ts";
+import type { TsDoc } from "../ts/template.ts";
 import { listen } from "./core.ts";
 
 export type WorkerOptions = Pick<ModuleGraphOptions, "resolve"> & {
@@ -19,10 +20,10 @@ export type EmitParams = { readonly uri: string };
 
 export type EmitResult = {
   readonly language: string;
-  /** Error messages. When there are any, nothing else is emitted. */
+  /** Error messages. When there are any, only the TypeScript surface is emitted. */
   readonly errors: readonly string[];
-  /** The TypeScript surface text. */
-  readonly typescript: string | null;
+  /** The TypeScript surface, with mappings to guest spans. Present whenever the checker produced IR. */
+  readonly typescript: TsDoc | null;
   /** Each named target's text, or the error it threw. */
   readonly targets: Readonly<Record<string, string>>;
   /** ES modules for the document and its guest imports, imports first. `code` is null without a runtime. */
@@ -78,8 +79,10 @@ export const serveWorker = (
     const analysis = graph.analyze(uri);
     const language = analysis.language;
     const errors = analysis.diagnostics.filter((entry) => entry.severity === "error").map((entry) => entry.message);
-    const empty = { language: language.name, typescript: null, targets: {}, modules: [] };
-    if (errors.length > 0 || analysis.ir === null) return { ...empty, errors: errors.length > 0 ? errors : ["Nothing to emit"] };
+    const typescript = language.typescript && analysis.ir !== null ? language.typescript(analysis.ir) : null;
+    if (errors.length > 0 || analysis.ir === null) {
+      return { language: language.name, errors: errors.length > 0 ? errors : ["Nothing to emit"], typescript, targets: {}, modules: [] };
+    }
     const targets: Record<string, string> = {};
     for (const [name, target] of Object.entries(language.targets ?? {})) {
       try {
@@ -92,7 +95,7 @@ export const serveWorker = (
     return {
       language: language.name,
       errors: [],
-      typescript: language.typescript ? language.typescript(analysis.ir).text : null,
+      typescript,
       targets,
       modules: (node ? reachable(node) : []).map((entry) => ({
         uri: entry.uri,

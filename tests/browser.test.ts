@@ -179,7 +179,8 @@ test("the worker takes in-memory files and emits a document's projections", asyn
   assert.deepEqual(emitted.errors, []);
   assert.deepEqual(emitted.modules.map((module: { uri: string }) => module.uri), ["file:///play/lib.calc", "file:///play/main.calc"]);
   assert.match(emitted.modules[1].code, /from "\.\/lib\.calc"/);
-  assert.match(emitted.typescript, /total/);
+  assert.match(emitted.typescript.text, /total/);
+  assert.ok(emitted.typescript.mappings.length > 0);
 
   // A changed import re-checks the open importer.
   const rechecked = lsp.next("file:///play/main.calc");
