@@ -81,7 +81,7 @@ Working:
 - Checker helpers for repaired trees: `isError`/`isMissing`, reports at missing syntax are dropped, and a poison `TypeStore.error()`, so a missing operand or name yields only the parse diagnostic.
 - Declarative name binding: a `bind { ... }` block in `.parl` (defs, refs, hoisted, sequential, and field scopes, members, builtins, `unique`, imports) that calc and machine use; it records scope extents in facts, and `cx.scope`/`cx.bind` record them for hand-written checkers.
 - Checker, facts, and the generic LSP: diagnostics with quick fixes (including "did you mean" for unknown names), hover, definition, references, document and workspace symbols, folding, scope-aware completion, inlay hints, semantic tokens (full, delta, range, with declaration and readonly modifiers), cross-file definition, references, and rename.
-- Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
+- Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph. Imports can also name TypeScript files and packages (bare specifiers, a `resolve` hook in `parlance.config.ts`): calc's `from "./rates.ts" use taxRate;` is checked by tsgo through the generated surface, with errors at the guest span.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step. A `runtime` that returns a `TsDoc` gets an inline source map, so stack traces show guest positions under `--enable-source-maps`.
 - Named targets with `parlance emit`.

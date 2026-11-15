@@ -69,6 +69,11 @@ const steps: readonly Step[] = [
     expect: ["250\n250 125 true"],
   },
   {
+    name: "run calc that imports TypeScript through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/typescript/runpriced.ts"],
+    expect: ["tax: 20 20"],
+  },
+  {
     name: "run imported examples through the Node loader",
     command: [
       "node",
