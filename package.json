@@ -32,7 +32,10 @@
     "nvim:smoke": "nvim --headless -u NONE -l tools/nvim-smoke.lua",
     "nvim:check": "sh tools/nvim-exrc-check.sh",
     "compare:langkit": "node tools/compare-langkit.mjs",
-    "compare:gate": "node tools/compare-langkit.mjs --gate"
+    "compare:gate": "node tools/compare-langkit.mjs --gate",
+    "site:dev": "pnpm --filter @parlance/site dev",
+    "site:build": "pnpm --filter @parlance/site build",
+    "site:test": "pnpm --filter @parlance/site test"
   },
   "dependencies": {
     "vscode-languageserver": "^10.1.2",
