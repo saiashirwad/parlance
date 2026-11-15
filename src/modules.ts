@@ -1,4 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Binding, Dependency } from "./check/index.ts";
@@ -33,7 +34,7 @@ export type ModuleGraphOptions = {
   readonly languages: readonly AnyLanguage[];
   /** Returns file text, or null when the document does not exist. Defaults to the filesystem. */
   readonly read?: (uri: string) => string | null;
-  /** Returns the resolved document URI, or null. Defaults to URL resolution from the importer. */
+  /** Returns the resolved document URI, or null. Defaults to `defaultResolve`. */
   readonly resolve?: (specifier: string, from: string) => string | null;
 };
 
@@ -71,8 +72,16 @@ const readDisk = (uri: string): string | null => {
   }
 };
 
-const resolveUrl = (specifier: string, from: string): string | null => {
+const bare = (specifier: string): boolean => !/^(\.{0,2}\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(specifier);
+
+/**
+ * The default resolver. Relative and absolute specifiers resolve as URLs from the importer. A bare
+ * specifier goes through Node package resolution from the importer's directory, so `node_modules`
+ * and package `exports` apply. Returns null when nothing resolves.
+ */
+export const defaultResolve = (specifier: string, from: string): string | null => {
   try {
+    if (bare(specifier)) return from.startsWith("file:") ? pathToFileURL(createRequire(from).resolve(specifier)).href : null;
     const url = new URL(specifier, from);
     return url.href;
   } catch {
@@ -103,7 +112,7 @@ export class ModuleGraph {
   constructor(options: ModuleGraphOptions) {
     this.#languages = options.languages;
     this.#read = options.read ?? readDisk;
-    this.#resolve = options.resolve ?? resolveUrl;
+    this.#resolve = options.resolve ?? defaultResolve;
   }
 
   /** Analyzes an entry and every reachable dependency. Returns the entry's routed view. */

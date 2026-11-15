@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { calc, type CalcModule } from "../examples/calc/calc.ts";
 import { schema, type SchemaModule } from "../examples/schema/schema.ts";
-import { ModuleGraph } from "../src/modules.ts";
+import { loadProject } from "../src/config.ts";
+import { defaultResolve, ModuleGraph } from "../src/modules.ts";
 import { definitionAt } from "../src/check/index.ts";
 import type { AnyLanguage } from "../src/language.ts";
 
@@ -286,4 +290,32 @@ test("a non-guest import is an external edge: not analyzed, reported only when m
   assert.deepEqual(graph.order(), ["memory://dir/a.schema"]);
   // An external edge does not force a rebuild.
   assert.equal(graph.analyze("memory://dir/a.schema"), first);
+});
+test("a bare specifier resolves through Node package resolution; an unknown package reports at the specifier", () => {
+  const source = "schema A\nimport \"vscode-languageserver-textdocument\";\nimport \"no-such-package\";\nmodel A { id: Int @primary }\n";
+  const uri = new URL("a.schema", import.meta.url).href;
+  const analysis = new ModuleGraph({ languages: [schema], read: (id) => (id === uri ? source : null) }).analyze(uri);
+  const missing = analysis.diagnostics.filter((entry) => /Cannot resolve import/.test(entry.message));
+  assert.equal(missing.length, 1, analysis.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(source.slice(missing[0]!.span.start, missing[0]!.span.end), "no-such-package");
+});
+
+test("a custom resolve replaces the default and loads from a project config", async () => {
+  const resolve = (specifier: string, from: string) =>
+    specifier.startsWith("@lib/") ? `memory://lib/${specifier.slice(5)}` : defaultResolve(specifier, from);
+  const files = {
+    "memory://dir/a.schema": "schema A\nimport \"@lib/b.schema\";\nquery users(): User[] = User |> all;\n",
+    "memory://lib/b.schema": "schema B\nmodel User { id: Int @primary }\n",
+  };
+  const graph = new ModuleGraph({ languages: [schema], read: (uri) => files[uri as keyof typeof files] ?? null, resolve });
+  assert.deepEqual(graph.analyze("memory://dir/a.schema").diagnostics, []);
+
+  const directory = mkdtempSync(join(tmpdir(), "parlance-config-"));
+  try {
+    writeFileSync(join(directory, "parlance.config.mjs"), "export default { languages: [], resolve: (s) => s };\n");
+    const project = await loadProject(join(directory, "parlance.config.mjs"));
+    assert.equal(project.resolve?.("x", "y"), "x");
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
 });

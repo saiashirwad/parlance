@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, extname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { discoverConfig, loadLanguages } from "../config.ts";
+import { discoverConfig, loadProject } from "../config.ts";
 import { type Diagnostic, site } from "../diagnostic.ts";
 import { extensionMap, type AnyLanguage } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
@@ -90,7 +90,7 @@ const buildProject = async (
     ? resolve(base, options.languages)
     : discoverConfig(base);
   try {
-    const languages = configured ? await loadLanguages(configured) : [];
+    const { languages, resolve: resolver } = configured ? await loadProject(configured) : { languages: [], resolve: undefined };
     const extensions = new Set<string>();
     for (const language of languages) for (const extension of language.extensions) extensions.add(extension);
     const watched = configured
@@ -104,7 +104,7 @@ const buildProject = async (
       watchedFiles: watched,
       configIdentity: identity(configured, watched),
       error: null,
-      graph: new ModuleGraph({ languages }),
+      graph: new ModuleGraph({ languages, ...(resolver ? { resolve: resolver } : {}) }),
     };
   } catch (cause) {
     return {

@@ -36,7 +36,7 @@ import { type Diagnostic, diagnostic, site } from "../diagnostic.ts";
 import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
 import { analyze, extensionMap, type AnyLanguage, type CompletionKind } from "../language.ts";
-import { ModuleGraph } from "../modules.ts";
+import { ModuleGraph, type ModuleGraphOptions } from "../modules.ts";
 import { reparse, type IncrementalStats } from "../parser/incremental.ts";
 import { encodeAnalysis, folding } from "./semantic.ts";
 
@@ -119,7 +119,7 @@ export type ServerOptions = {
   readonly output?: NodeJS.WritableStream;
 };
 
-export const serve = (languages: readonly AnyLanguage[]): void => {
+export const serve = (languages: readonly AnyLanguage[], options: Pick<ModuleGraphOptions, "resolve"> = {}): void => {
   const registry = extensionMap(languages);
   const connection = createConnection(process.stdin, process.stdout);
   const documents = new TextDocuments(TextDocument);
@@ -129,6 +129,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
   let resultCounter = 0;
   const graph = new ModuleGraph({
     languages,
+    ...options,
     read: (uri) => {
       const open = documents.get(uri);
       if (open) return open.getText();

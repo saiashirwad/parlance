@@ -3,7 +3,7 @@ import { registerHooks } from "node:module";
 import { fileURLToPath } from "node:url";
 import { render, site } from "../diagnostic.ts";
 import { extensionMap, type AnyLanguage } from "../language.ts";
-import { ModuleGraph } from "../modules.ts";
+import { ModuleGraph, type ModuleGraphOptions } from "../modules.ts";
 import { withSourceMap } from "./sourcemap.ts";
 
 const describe = (diagnostic: Parameters<typeof render>[0], url: string, source: string): string => {
@@ -13,9 +13,12 @@ const describe = (diagnostic: Parameters<typeof render>[0], url: string, source:
 };
 
 /** Installs Node module hooks for every guest extension. Guest imports resolve through one graph. */
-export const registerLanguages = (languages: readonly AnyLanguage[]): void => {
+export const registerLanguages = (
+  languages: readonly AnyLanguage[],
+  options: Pick<ModuleGraphOptions, "resolve"> = {},
+): void => {
   const registry = extensionMap(languages);
-  const graph = new ModuleGraph({ languages });
+  const graph = new ModuleGraph({ languages, ...options });
   registerHooks({
     load(url, context, nextLoad) {
       if (!url.startsWith("file:")) return nextLoad(url, context);
