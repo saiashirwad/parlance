@@ -490,3 +490,39 @@ test("the generic LSP serves a state-machine language without new server code", 
     client.close();
   }
 });
+
+test("completion offers only names in scope, declared-before names first", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../examples/machine/order.machine", import.meta.url), "utf8");
+  const lines = source.split("\n");
+  const machineUri = pathToFileURL("/virtual/scope.machine").href;
+  const advancedUri = pathToFileURL("/virtual/scope.advanced").href;
+  const advanced = "let one = 1 in\nlet f = fn(option: number) => option in\nf(one)\n";
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    await client.open(machineUri, source);
+    await client.open(advancedUri, advanced);
+    const complete = async (target: string, line: number, character: number): Promise<Message[]> =>
+      (await client.request("textDocument/completion", {
+        textDocument: { uri: target },
+        position: { line, character },
+      })).result;
+    const edit = lines.findIndex((entry) => entry.includes("on edit -> Cart"));
+    const labels = (items: Message[]) => items.map((item) => item.label);
+    const sibling = await complete(machineUri, edit, lines[edit]!.indexOf("Cart"));
+    assert.ok(labels(sibling).includes("Checkout"));
+    assert.ok(labels(sibling).includes("state"));
+    // A checker using only cx.scope and cx.bind gets the same filtering.
+    const body = await complete(advancedUri, 1, advanced.split("\n")[1]!.lastIndexOf("option"));
+    assert.ok(labels(body).includes("option"));
+    assert.ok(labels(body).includes("one"));
+    const outside = await complete(advancedUri, 2, 3);
+    assert.ok(!labels(outside).includes("option"));
+    const sorted = (items: Message[], label: string) => items.find((item) => item.label === label)?.sortText;
+    assert.equal(sorted(outside, "f")?.[0], "0");
+  } finally {
+    client.close();
+  }
+});

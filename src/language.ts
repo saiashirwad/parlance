@@ -193,6 +193,7 @@ export const analyzeParsed = <Ast, Ir, Type>(
       ir = null;
     }
   }
+  checker.seal();
   const diagnostics = sortDiagnostics(checker.facts.diagnostics);
   let tokenCache: Token[] | null = null;
   const tokens = (): Token[] => {

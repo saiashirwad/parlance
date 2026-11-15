@@ -21,6 +21,7 @@ import {
   type Definition,
   definitionAt,
   type Facts,
+  inScope,
   referenceAt,
   type Token,
   tokenKinds,
@@ -349,7 +350,9 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       detail?: string;
       insertText?: string;
       filterText?: string;
+      sortText?: string;
     }[] = [];
+    const offset = document.offsetAt(position);
     for (const keyword of language.grammar.spec.keywords) {
       items.push({ label: keyword, kind: CompletionItemKind.Keyword, detail: "keyword" });
     }
@@ -362,8 +365,10 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
         ...(completion.filterText === undefined ? {} : { filterText: completion.filterText }),
       });
     }
-    for (const definition of analysis.facts.definitions) {
+    for (const definition of inScope(analysis.facts, offset)) {
       items.push({
+        // Names declared before the cursor sort first.
+        sortText: `${definition.span.start < offset ? 0 : 1}${definition.name}`,
         label: definition.name,
         kind: definition.kind === "function" || definition.kind === "method"
           ? CompletionItemKind.Function
@@ -379,7 +384,6 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       seen.add(item.label);
       return true;
     });
-    const offset = document.offsetAt(position);
     const linePrefix = document.getText().slice(Math.max(0, offset - 64), offset);
     if (/@[A-Za-z0-9_]*$/.test(linePrefix)) return unique.filter((item) => item.label.startsWith("@"));
     return unique;

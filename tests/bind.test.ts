@@ -109,10 +109,11 @@ test("bind: scope extents record where each name is visible", () => {
   const source = "let a = host;\nshow fn x => local y = x in y;\n";
   const analysis = analyze(scoped, source);
   const names = (offset: number) => visibleAt(analysis.facts, offset).map((definition) => definition.name);
-  assert.deepEqual(names(site(source, "host")), []);
-  assert.deepEqual(names(site(source, "show")), ["a"]);
-  assert.deepEqual(names(site(source, "x", 1)), ["x", "a"]);
-  assert.deepEqual(names(site(source, "y", 1)), ["y", "x", "a"]);
+  // `host` is bound by hand with `cx.bind`: visible in the whole file, after the bind block's names.
+  assert.deepEqual(names(site(source, "host")), ["host"]);
+  assert.deepEqual(names(site(source, "show")), ["a", "host"]);
+  assert.deepEqual(names(site(source, "x", 1)), ["x", "a", "host"]);
+  assert.deepEqual(names(site(source, "y", 1)), ["y", "x", "a", "host"]);
 });
 
 test("bind: defineLanguage derives imports and builtin completions", () => {

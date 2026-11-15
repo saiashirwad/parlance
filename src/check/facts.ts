@@ -107,6 +107,21 @@ export const visibleAt = <T>(value: Facts<T>, offset: number): Definition<T>[] =
     .flatMap((scope) => byId.get(scope.id) ?? []);
 };
 
+/**
+ * What completion offers at `offset`: definitions visible there, plus those no scope extent covers
+ * (members, properties). Without recorded scopes every definition is offered.
+ */
+export const inScope = <T>(value: Facts<T>, offset: number): Definition<T>[] => {
+  if (value.scopes.length === 0) return value.definitions;
+  const scoped = new Set<number>();
+  const visible = new Set<number>();
+  for (const scope of value.scopes) {
+    scoped.add(scope.id);
+    if (scope.span.start <= offset && offset <= scope.span.end) visible.add(scope.id);
+  }
+  return value.definitions.filter((definition) => visible.has(definition.id) || !scoped.has(definition.id));
+};
+
 export const contains = (outer: Span, offset: number): boolean => outer.start <= offset && offset < outer.end;
 
 /** The narrowest typed span containing `offset`. */

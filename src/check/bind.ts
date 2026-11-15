@@ -297,7 +297,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
         own.add(binding.id);
         entries.set(node, entry);
         if (def.exported) exported.push(entry);
-        if (scope !== null) cx.facts.scopes.push({ id: binding.id, span: { start: Math.max(from, scope.span.start), end: scope.span.end } });
+        if (scope !== null) cx.visible(binding.id, { start: Math.max(from, scope.span.start), end: scope.span.end });
       }
     }
   });

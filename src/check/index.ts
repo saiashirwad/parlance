@@ -6,6 +6,7 @@ export {
   definitionAt,
   type Facts,
   facts,
+  inScope,
   type Reference,
   referenceAt,
   refinedKinds,

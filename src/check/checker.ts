@@ -67,6 +67,9 @@ export class Checker<T = unknown> {
   readonly facts: Facts<T>;
   readonly dependencies: Dependencies<T>;
   readonly #scopes: Map<string, Binding<T>>[] = [new Map()];
+  /** Parallel to `#scopes`: bindings bound there that still need a visibility extent. */
+  readonly #bound: Binding<T>[][] = [[]];
+  readonly #extended = new Set<number>();
   readonly #imported = new Map<string, Binding<T>>();
   #nextBinding = 1;
   #references = new Set<string>();
@@ -120,13 +123,59 @@ export class Checker<T = unknown> {
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "info" }));
   }
 
-  /** Runs `body` in a child lexical scope, restoring the parent even if it throws. */
-  scope<A>(body: () => A): A {
+  /**
+   * Runs `body` in a child lexical scope, restoring the parent even if it throws. Pass the node's
+   * span when you have it: completion uses it as the extent where the scope's names are visible.
+   * Without it the extent is inferred from the facts recorded inside `body`.
+   */
+  scope<A>(body: () => A): A;
+  scope<A>(extent: Span | Spanned, body: () => A): A;
+  scope<A>(first: Span | Spanned | (() => A), second?: () => A): A {
+    const body = typeof first === "function" ? first : second!;
+    const given = typeof first === "function" ? undefined : at(first);
+    const { definitions, references, types } = this.facts;
+    const before = [definitions.length, references.length, types.length] as const;
     this.#scopes.push(new Map());
+    this.#bound.push([]);
     try {
       return body();
     } finally {
       this.#scopes.pop();
+      const bound = this.#bound.pop()!;
+      if (bound.length > 0) {
+        let start = given?.start ?? Infinity;
+        let end = given?.end ?? -1;
+        if (given === undefined) {
+          const widen = (span: Span): void => {
+            if (span.start < start) start = span.start;
+            if (span.end > end) end = span.end;
+          };
+          for (let i = before[0]; i < definitions.length; i++) widen(definitions[i]!.span);
+          for (let i = before[1]; i < references.length; i++) widen(references[i]!.span);
+          for (let i = before[2]; i < types.length; i++) widen(types[i]!.span);
+        }
+        if (end >= 0) this.#extend(bound, { start, end });
+      }
+    }
+  }
+
+  /** Records the extent where `id` is visible (a `bind` block records its own). */
+  visible(id: number, span: Span): void {
+    this.#extended.add(id);
+    this.facts.scopes.push({ id, span });
+  }
+
+  /** Records extents for names bound in the file scope. Called once, after checking. */
+  seal(): void {
+    this.#extend(this.#bound[0]!, { start: 0, end: this.source.length });
+    this.#bound[0]!.length = 0;
+  }
+
+  #extend(bound: readonly Binding<T>[], span: Span): void {
+    for (const binding of bound) {
+      if (this.#extended.has(binding.id)) continue;
+      this.#extended.add(binding.id);
+      this.facts.scopes.push({ id: binding.id, span });
     }
   }
 
@@ -134,6 +183,7 @@ export class Checker<T = unknown> {
   bind(binding: Binding<T>): Binding<T> {
     if (binding.name === "") return binding;
     this.#scopes[this.#scopes.length - 1]!.set(binding.name, binding);
+    this.#bound[this.#bound.length - 1]!.push(binding);
     return binding;
   }
 
