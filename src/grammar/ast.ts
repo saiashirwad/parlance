@@ -1,4 +1,4 @@
-import type { Span, Text } from "../source.ts";
+import type { ErrorNode, Span, Text } from "../source.ts";
 
 /** The surface AST of a `.parl` grammar file. Every parser produces exactly these shapes. */
 export type GrammarFile = {
@@ -9,8 +9,53 @@ export type GrammarFile = {
   readonly tokens: readonly TokenDecl[];
   readonly root: Root | null;
   readonly rules: readonly Rule[];
+  readonly bind: Bind | null;
   readonly span: Span;
 };
+
+/** A `bind { ... }` block: declarative name binding over tagged nodes. See docs/02-grammar.md. */
+export type Bind = { readonly kind: "bind"; readonly entries: readonly BindEntry[]; readonly span: Span };
+
+/** `tag.field`, or a bare `tag` where an entry allows one. */
+export type BindPath = { readonly kind: "path"; readonly node: Text; readonly field: Text | null; readonly span: Span };
+
+/** Where a definition is visible: after its node (sequential), or only inside one field. */
+export type BindVisibility =
+  | { readonly kind: "after"; readonly span: Span }
+  | { readonly kind: "in"; readonly target: BindPath; readonly span: Span };
+
+export type BindEntry =
+  | { readonly kind: "import" | "scope"; readonly paths: readonly BindPath[]; readonly span: Span }
+  | {
+    readonly kind: "builtin";
+    readonly names: readonly Text[];
+    readonly type: Text;
+    readonly label: Text | null;
+    readonly span: Span;
+  }
+  | {
+    readonly kind: "def";
+    readonly exported: Text | null;
+    readonly paths: readonly BindPath[];
+    readonly type: Text;
+    readonly label: Text | null;
+    readonly visibility: BindVisibility | null;
+    readonly span: Span;
+  }
+  | {
+    readonly kind: "ref";
+    readonly paths: readonly BindPath[];
+    readonly label: Text;
+    readonly noun: Text | null;
+    readonly span: Span;
+  }
+  | {
+    readonly kind: "unique";
+    readonly paths: readonly BindPath[];
+    readonly owners: readonly Text[];
+    readonly message: Text | null;
+    readonly span: Span;
+  };
 
 export type Skip = { readonly kind: "skip"; readonly pattern: Text; readonly span: Span };
 export type Word = { readonly kind: "word"; readonly pattern: Text; readonly span: Span };
@@ -33,7 +78,8 @@ export type Rule = {
   readonly span: Span;
 };
 
-export type Body = Precedence | Alternatives;
+/** A repair parse leaves an error node for a missing body or operand (`rule A = ;`, `a:&`). */
+export type Body = Precedence | Alternatives | ErrorNode;
 
 export type Alternatives = {
   readonly kind: "alternatives";
@@ -72,7 +118,8 @@ export type Level = {
 export type Unary =
   | { readonly kind: "and" | "not"; readonly expr: Unary; readonly span: Span }
   | { readonly kind: "star" | "plus" | "opt"; readonly expr: Primary; readonly span: Span }
-  | Primary;
+  | Primary
+  | ErrorNode;
 
 export type Primary =
   | { readonly kind: "lit"; readonly text: Text; readonly span: Span }
@@ -90,7 +137,7 @@ export type Primary =
   };
 
 export const assoc = new Set(["left", "right", "none", "prefix", "postfix"]);
-export const declarations = new Set(["grammar", "skip", "word", "token", "root", "rule"]);
+export const declarations = new Set(["grammar", "skip", "word", "token", "root", "rule", "bind"]);
 export const builtins = new Set(["word"]);
 
 /** Drops spans so a bootstrap parse and a self-hosted parse can be compared structurally. */

@@ -234,3 +234,71 @@ test("tsgo hovers and navigates from TypeScript into a schema file", async () =>
     client.kill();
   }
 });
+const open = async (client: Client, uri: string, text: string, languageId: string): Promise<void> => {
+  client.notify("textDocument/didOpen", { textDocument: { uri, languageId, version: 1, text } });
+};
+
+const start = async (): Promise<Client> => {
+  const client = new Client(process.execPath, [join(root, "node_modules/typescript/bin/tsc"), "--lsp", "--stdio"]);
+  await client.request("initialize", {
+    processId: process.pid,
+    rootUri: pathToFileURL(root).href,
+    workspaceFolders: [{ uri: pathToFileURL(root).href, name: "parlance" }],
+    initializationOptions: { runExternalCode: true },
+    capabilities: { general: { positionEncodings: ["utf-16"] }, textDocument: { hover: { contentFormat: ["markdown"] } } },
+  });
+  client.notify("initialized", {});
+  return client;
+};
+
+test("tsgo checks a calc file that imports TypeScript names and reports at the guest span", async () => {
+  const priced = join(root, "examples/calc/priced.calc");
+  const consumer = join(root, "examples/typescript/priced.ts");
+  const rates = pathToFileURL(join(root, "examples/calc/rates.ts")).href;
+  const client = await start();
+  try {
+    // The consumer sees real types through the guest surface.
+    const consumerSource = readFileSync(consumer, "utf8");
+    const consumerUri = pathToFileURL(consumer).href;
+    await open(client, consumerUri, consumerSource, "typescript");
+    const clean = await client.request("textDocument/diagnostic", { textDocument: { uri: consumerUri } });
+    assert.deepEqual(clean.items, []);
+
+    // A string used as a number is a tsgo error at the guest expression.
+    const bad = 'from "./rates.ts" use taxRate, label;\n\nlet bad = label * 2;\nshow bad;\n';
+    const guestUri = pathToFileURL(priced).href;
+    await open(client, guestUri, bad, "calc");
+    const diagnostics = await client.request("textDocument/diagnostic", { textDocument: { uri: guestUri } });
+    const found = diagnostics.items.find((item: Message) => /arithmetic operation/.test(item.message));
+    assert.ok(found, JSON.stringify(diagnostics.items));
+    assert.equal(found.range.start.line, 2);
+    assert.equal(found.range.start.character, bad.split("\n")[2]!.indexOf("label"));
+
+    // Hover and definition on a foreign name reach rates.ts.
+    const at = position(bad, "label");
+    const definition = await client.request("textDocument/definition", { textDocument: { uri: guestUri }, position: at });
+    const locations = Array.isArray(definition) ? definition : [definition];
+    assert.ok(
+      locations.some((entry) => entry.uri === rates || entry.targetUri === rates),
+      `definition should land in rates.ts: ${JSON.stringify(definition)}`,
+    );
+  } finally {
+    client.kill();
+  }
+});
+test("tsgo types a snippet's result through the .embeds registry", async () => {
+  const consumer = join(root, "examples/embed/app.ts");
+  const source = readFileSync(consumer, "utf8");
+  const client = await start();
+  try {
+    const uri = pathToFileURL(consumer).href;
+    await open(client, uri, source, "typescript");
+    const diagnostics = await client.request("textDocument/diagnostic", { textDocument: { uri } });
+    assert.deepEqual(diagnostics.items, []);
+    const hover = await client.request("textDocument/hover", { textDocument: { uri }, position: position(source, "userByEmail", 1) });
+    const hoverText = typeof hover.contents === "string" ? hover.contents : hover.contents.value;
+    assert.match(hoverText, /User \| undefined/);
+  } finally {
+    client.kill();
+  }
+});

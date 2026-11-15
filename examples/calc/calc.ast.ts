@@ -2,7 +2,9 @@
 
 export type Span = { readonly start: number; readonly end: number };
 
-export type Text = { readonly text: string; readonly span: Span };
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export interface FileFileNode {
   readonly kind: "file";
@@ -27,8 +29,18 @@ export interface DeclShowNode {
 
 export type Decl =
   | Import
+  | TsImport
   | DeclLetNode
   | DeclShowNode;
+
+export interface TsImportTsimportNode {
+  readonly kind: "tsimport";
+  readonly specifier: Text;
+  readonly names: readonly Name[];
+  readonly span: Span;
+}
+
+export type TsImport = TsImportTsimportNode;
 
 export interface ImportImportNode {
   readonly kind: "import";
@@ -84,7 +96,8 @@ export type Expr =
   | ExprNameNode
   | ExprBinaryNode
   | ExprPrefixNode
-  | ExprPostfixNode;
+  | ExprPostfixNode
+  | ErrorNode;
 
 export type BooleanLit = Text;
 

@@ -16,8 +16,13 @@ rule File = {
 
 rule Decl = {
   | Import
+  | TsImport
   | @let "let" ~ name:Name "=" ~ value:Expr ";"
   | @show "show" ~ value:Expr ";"
+};
+
+rule TsImport = {
+  @tsimport "from" specifier:$String "use" names:sep(Name, ",") ";"
 };
 
 rule Import = {
@@ -44,3 +49,9 @@ rule BooleanLit = {
 rule Name = {
   word
 };
+
+bind {
+  import import.specifier
+  export def let.name: variable after
+  ref name.value: variable "name"
+}

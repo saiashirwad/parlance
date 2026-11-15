@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { discoverConfig, loadLanguages } from "../config.ts";
+import { discoverConfig, loadProject } from "../config.ts";
 import { type Diagnostic, site } from "../diagnostic.ts";
 import { extensionMap, type AnyLanguage } from "../language.ts";
 import { ModuleGraph } from "../modules.ts";
+import { embedRegistry, embedsExtension, embedStamp, embedTags, hostLocation, stubSnippets, touchStamp } from "./embed.ts";
 import { type Mapping } from "./template.ts";
 
 type HostConfig = {
@@ -31,6 +32,7 @@ type Project = {
   readonly configPath: string | null;
   readonly languages: readonly AnyLanguage[];
   readonly extensions: ReadonlySet<string>;
+  readonly tags: ReadonlyMap<string, AnyLanguage>;
   readonly watchedFiles: readonly string[];
   readonly configIdentity: string;
   readonly error: string | null;
@@ -71,12 +73,32 @@ const contents = (file: string): string => {
   }
 };
 
-const identity = (configPath: string | null, files: readonly string[]): string => {
+/** Guest files count whole; a TypeScript host file counts only its snippets, so other edits keep the project. */
+const identity = (
+  configPath: string | null,
+  files: readonly string[],
+  tags: ReadonlyMap<string, AnyLanguage>,
+): string => {
   const hash = createHash("sha256");
   if (configPath) hash.update(configPath).update("\0").update(contents(configPath)).update("\0");
-  for (const file of files) hash.update(file).update("\0").update(contents(file)).update("\0");
+  for (const file of files) {
+    hash.update(file).update("\0");
+    if (!file.endsWith(embedsExtension)) hash.update(contents(file)).update("\0");
+    else {
+      for (const host of stubSnippets(file, tags)) {
+        for (const snippet of host.snippets) hash.update(`${host.path}\0${snippet.tag}\0${snippet.key}\0${snippet.text}\0`);
+      }
+    }
+  }
   return hash.digest("hex");
 };
+
+/** Host files a stub reads, so saving one refreshes the registry, and the stamp the LSP writes. */
+const hostsOf = (stubs: readonly string[], tags: ReadonlyMap<string, AnyLanguage>): string[] =>
+  stubs.flatMap((stub) => {
+    touchStamp(stub, true);
+    return [embedStamp(stub), ...stubSnippets(stub, tags).map((host) => host.path)];
+  });
 
 const buildProject = async (
   key: string,
@@ -90,21 +112,23 @@ const buildProject = async (
     ? resolve(base, options.languages)
     : discoverConfig(base);
   try {
-    const languages = configured ? await loadLanguages(configured) : [];
+    const { languages, resolve: resolver } = configured ? await loadProject(configured) : { languages: [], resolve: undefined };
     const extensions = new Set<string>();
     for (const language of languages) for (const extension of language.extensions) extensions.add(extension);
-    const watched = configured
-      ? guestFiles(base, extensions).sort()
-      : [];
+    const tags = embedTags(languages);
+    if (tags.size > 0) extensions.add(embedsExtension);
+    const found = configured ? guestFiles(base, extensions).sort() : [];
+    const watched = [...new Set([...found, ...hostsOf(found.filter((file) => file.endsWith(embedsExtension)), tags)])].sort();
     return {
       key,
       configPath: configured,
       languages,
       extensions,
+      tags,
       watchedFiles: watched,
-      configIdentity: identity(configured, watched),
+      configIdentity: identity(configured, found, tags),
       error: null,
-      graph: new ModuleGraph({ languages }),
+      graph: new ModuleGraph({ languages, ...(resolver ? { resolve: resolver } : {}) }),
     };
   } catch (cause) {
     return {
@@ -112,6 +136,7 @@ const buildProject = async (
       configPath: configured,
       languages: [],
       extensions: new Set(),
+      tags: new Map(),
       watchedFiles: [],
       configIdentity: `error:${String(cause)}`,
       error: `Cannot load ${configured ?? "language config"}: ${cause instanceof Error ? cause.message : String(cause)}`,
@@ -139,8 +164,32 @@ const mapperDiagnostic = (diagnostic: Diagnostic, uri: string): MapperDiagnostic
   };
 };
 
+/** A `.embeds` stub: the typed tag registry. Snippet problems are reported on the stub, with their host position. */
+const registry = (project: Project, fileName: string): TransformResult => {
+  const built = embedRegistry(resolve(fileName), project.graph, project.tags);
+  const directory = dirname(resolve(fileName));
+  return {
+    text: built.text,
+    extension: ".ts",
+    mappings: [],
+    diagnostics: built.diagnostics.map(({ file, diagnostic }) => ({
+      messageText: `${hostLocation(relative(directory, file.path), file.source, diagnostic.span.start)}: ${diagnostic.message}`,
+      start: 0,
+      length: 0,
+      code: 1,
+    })),
+  };
+};
+
 const transform = (project: Project, fileName: string, content: string): TransformResult => {
   if (project.error) return failed(project.error);
+  if (fileName.endsWith(embedsExtension)) {
+    try {
+      return registry(project, fileName);
+    } catch (cause) {
+      return failed(cause instanceof Error ? cause.message : String(cause));
+    }
+  }
   const language = projectFor(project, fileName);
   if (!language) return failed(`No parlance language is registered for ${extname(fileName)} files`);
   try {

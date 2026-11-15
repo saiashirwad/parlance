@@ -1,8 +1,11 @@
 /** A UTF-16 half-open range in a document. */
 export type Span = { readonly start: number; readonly end: number };
 
-/** Source text plus the span it was read from. */
-export type Text = { readonly text: string; readonly span: Span };
+/** Source text plus the span it was read from. A repair parse marks a missing token `missing`, zero width. */
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+/** What a repair parse leaves, zero width, where a node is missing. */
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export type Edit = { readonly start: number; readonly end: number; readonly insert: string };
 

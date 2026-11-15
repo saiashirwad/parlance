@@ -1,7 +1,10 @@
 # Neovim
 
 Parlance ships one generic LSP. A project-local `.nvim.lua` registers it for
-`.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` files and enables semantic tokens. This is
+`.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` files and enables semantic tokens.
+It also attaches to TypeScript buffers, where it answers only inside embedded snippets such as
+`` schema("Blog")`...` `` and returns nothing elsewhere, so it runs beside `tsc` (see
+[08-embedding.md](08-embedding.md)). This is
 the same project-local `exrc` pattern used by the older `langkit` checkout.
 
 ## Quick start
@@ -47,6 +50,7 @@ repository.
 | Folding | `textDocument/foldingRange` |
 | Semantic tokens | enabled on attach; keywords, strings, numbers, types, properties |
 | Grammar files | `.parl` diagnostics, symbols, hover, definition, references, tokens |
+| Snippets in `.ts` | diagnostics, hover, definition, completion, tokens inside the template |
 | Formatting | not provided by the server |
 
 Cross-file navigation currently covers definition, references, and rename.
@@ -74,7 +78,7 @@ enabled.
 vim.lsp.config("parlance", {
   cmd = { "node", root .. "/src/lsp/cli.ts", "--config", root .. "/parlance.config.ts" },
   cmd_cwd = root,
-  filetypes = { "advanced", "calc", "schema", "machine", "parl" },
+  filetypes = { "advanced", "calc", "schema", "machine", "parl", "typescript" },
   workspace_required = true,
   root_dir = function(bufnr, on_dir)
     if vim.startswith(vim.api.nvim_buf_get_name(bufnr), root .. "/") then
@@ -154,11 +158,12 @@ Both assert:
   clears the diagnostic.
 - Advanced, schema, machine, and grammar symbols appear; advanced hover shows an ADT.
 - Definition from `catalog.schema` reaches `User` in `blog.schema`; `.parl` root rules resolve.
+- `examples/embed/app.ts` attaches `parlance`, and hover inside its schema snippet shows `User`.
 
 Passing output:
 
 ```
-ok nvim: advanced, calc, schema, machine, parl, hover, definition, tokens, diagnostics
+ok nvim: advanced, calc, schema, machine, parl, embedded snippets, hover, definition, tokens, diagnostics
 ```
 
 ## Troubleshooting

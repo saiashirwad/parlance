@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { type Binding, type Checker } from "../../src/check/index.ts";
+import { type Binding, type Checker, isError } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
 import { defineLanguage, importSpecifier } from "../../src/language.ts";
@@ -163,8 +163,11 @@ export type SchemaModule = {
   readonly mutations: readonly MutationIR[];
 };
 
-const refValue = (ref: TypeRef): TypeRefValue => {
+/** `null` for a type the parser reported missing. */
+const refValue = (ref: TypeRef): TypeRefValue | null => {
   switch (ref.kind) {
+    case "error":
+      return null;
     case "list":
       return { base: ref.type, list: true, nullable: false };
     case "optional":
@@ -386,6 +389,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     type: SchemaType,
     attribute: Attribute,
   ): DefaultIR | undefined => {
+    if (isError(value)) return undefined;
     if (type.kind === "model") {
       cx.error("Model fields cannot have defaults", attribute);
       return undefined;
@@ -449,6 +453,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       seen.add(field.name.text);
       const resolved = refValue(field.type);
+      if (!resolved) continue;
       if (resolved.list) {
         cx.error("Fields cannot have list types", field.type);
         continue;
@@ -577,6 +582,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
       paramNames.add(param.name.text);
       const resolved = refValue(param.type);
+      if (!resolved) return undefined;
       if (resolved.list) {
         cx.error("Query parameters cannot be lists", param.type);
         return undefined;
@@ -601,6 +607,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       expected: SchemaType,
       scope: ReadonlyMap<string, Binding<Checked>>,
     ): Bound | undefined => {
+      if (isError(value)) return undefined;
       if (value.kind === "paramRef") {
         const name = value.value;
         const param = scope.get(name.text);
@@ -654,6 +661,8 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     }
 
     let terminal: "first" | "all" | "count" | null = null;
+    // `|>` with a missing terminal: the parser reported it, so do not ask for one again.
+    let missingTerminal = false;
     let limit: StageIR | null = null;
     const stages: StageIR[] = [];
     declaration.stages.forEach((stage, index) => {
@@ -702,6 +711,10 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
           if (index !== declaration.stages.length - 1) {
             cx.error("The terminal must be the last stage", stage);
           }
+          if (isError(stage.terminal)) {
+            missingTerminal = true;
+            break;
+          }
           terminal = stage.terminal.kind;
           stages.push({ kind: "terminal", terminal });
           break;
@@ -709,12 +722,12 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       }
     });
 
-    if (!terminal) {
+    if (!terminal && !missingTerminal) {
       cx.error("A query needs a terminal stage: first, all, or count", declaration.name);
     }
 
     const declared = refValue(declaration.result);
-    const declaredBase = resolveBase(declared.base, enums, models, importedTypes, bindings, cx);
+    const declaredBase = declared && resolveBase(declared.base, enums, models, importedTypes, bindings, cx);
     const computed: ResultIR = terminal === "count"
       ? {
         type: { kind: "scalar", name: "Int" },
@@ -730,8 +743,8 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
       };
 
     if (declaredBase && terminal) {
-      const same = sameType(declaredBase, computed.type) && declared.list === computed.list
-        && declared.nullable === computed.nullable;
+      const same = sameType(declaredBase, computed.type) && declared!.list === computed.list
+        && declared!.nullable === computed.nullable;
       if (!same) {
         const expected = computed.list
           ? `${computed.type.name}[]`
@@ -803,6 +816,7 @@ const check = (file: File, cx: Checker<Checked>): SchemaModule => {
     };
 
     const valueOf = (value: MutationValue, field: FieldIR): Bound | undefined => {
+      if (isError(value)) return undefined;
       if (value.kind === "bind") {
         const param = paramOf(value.name, field);
         return param ? { sqlName: nextSqlName(), kind: "param", name: param.name.text } : undefined;
@@ -1411,11 +1425,14 @@ const kysely = (module: SchemaModule): string => [
 export const schema = defineLanguage<File, SchemaModule, Checked>({
   name: "schema",
   extensions: [".schema"],
+  embed: { tag: "schema" },
   grammar,
   check,
   imports: (file) =>
     file.declarations.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
-  exports: (module) => [...module.enums, ...module.models, ...module.queries].map((entry) => entry.binding),
+  // The runtime module exports `sql` and `open` only, so no declaration is a runtime value.
+  exports: (module) =>
+    [...module.enums, ...module.models, ...module.queries].map((entry) => ({ ...entry.binding, runtime: false as const })),
   typescript: types,
   runtime,
   show: (type) => type.kind === "query" || type.kind === "mutation" ? signatureText(type) : display(type),

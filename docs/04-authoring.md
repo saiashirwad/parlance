@@ -102,7 +102,9 @@ The generated module starts with the helper types and one interface per tagged a
 ```ts
 export type Span = { readonly start: number; readonly end: number };
 
-export type Text = { readonly text: string; readonly span: Span };
+export type Text = { readonly text: string; readonly span: Span; readonly missing?: true };
+
+export type ErrorNode = { readonly kind: "error"; readonly span: Span };
 
 export interface FileFileNode {
   readonly kind: "file";
@@ -125,6 +127,7 @@ The naming rules are mechanical:
 - A tagged alternative becomes `<Rule><Tag>Node`, so `@let` in `Decl` becomes `DeclLetNode`.
 - A rule becomes a union of its alternatives, or an alias when it has one shape. `Decl` is the union of `DeclLetNode` and `DeclShowNode`.
 - A precedence rule also gets `<Rule>BinaryNode`, `<Rule>PrefixNode`, and `<Rule>PostfixNode`.
+- A rule whose value repair can leave missing gets `| ErrorNode` in its union: a precedence rule with an operator, and a tagged or mixed-shape rule that some sequence references after it commits (after `~`, or after a literal no later sibling shares). Calc's `Expr` has it; `Decl`, only ever parsed in a list, does not. A missing token is a `Text` with `missing: true` and empty `text`.
 - A rule named `Text` or `Span` becomes `TextRule` or `SpanRule` with a warning, because those names are taken by the helpers. A rule that is a TypeScript reserved word gets the same suffix.
 
 Rerun `gen` after every grammar change and check in the result. `tests/grammar-types.test.ts` asserts that `examples/calc/calc.ast.ts` is current.
@@ -137,20 +140,38 @@ The language's `check` field receives the parsed AST and a `Checker` from `parla
 readonly check: (file: Ast, cx: Checker<Type>) => Ir;
 ```
 
-The function returns checked IR. It reports errors through `cx`; it does not throw for guest errors. `examples/calc/calc.ts` walks expressions and resolves names:
+The function returns checked IR. It reports errors through `cx`; it does not throw for guest errors.
 
-```ts
-case "name": {
-  const binding = cx.resolve(expr.value.text, expr.value.span);
-  if (!binding) {
-    cx.error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
-    return { ir: { kind: "number", value: 0 }, type: store.unknown() };
-  }
-  const type = binding.type ?? store.unknown();
-  cx.typed(expr, type);
-  return { ir: { kind: "name", binding }, type };
+### Bind names declaratively
+
+Most name rules fit a grammar's [`bind` block](02-grammar.md#name-binding). Calc's whole scoping is three lines:
+
+```parl
+bind {
+  import import.specifier
+  export def let.name: variable after
+  ref name.value: variable "name"
 }
 ```
+
+The checker runs it first, then reads the results:
+
+```ts
+const bound = bind(file, cx, grammar.bind!, { accept: (name) => !reserved.has(name.text) });
+// ...
+case "name": {
+  const binding = context.bound.resolved(expr.value); // bind already reported an unknown name
+  ...
+}
+// once the value's type is known:
+const binding = bound.define(declaration, valueType)!;
+```
+
+`bind` walks the tree twice (declare, then resolve) and records definitions, references, hover types, scope extents (`facts.scopes`, where each name is visible), and "Duplicate name" / "Unknown ..." diagnostics. The result answers `binding(node)`, `resolved(site)`, `target(site)` (the defining node), `builtin(site)`, `members(node)`, `used(binding)`, `duplicate(site)`, and `exports`. `define(node, type)` settles a type the checker computes later and types every reference to it.
+
+Options: `type(node)` gives a definition's type when it is declared; `builtin(name)` gives a builtin's; `accept(name, node)` rejects a name the checker reports itself (calc's reserved words); `resolve(name)` is the fallback for names `bind` does not own, and defaults to `cx.resolve`, so bindings you add by hand (calc's imports via `cx.imported`) resolve too. Top-level hoisted names are also `cx.bind`-ed, so manual `cx.resolve` sees them. A duplicate or rejected definition's subtree is not resolved, and after one unknown name a node reports no more, so broken input does not cascade.
+
+Anything the block cannot say stays in the checker: machine still checks payload arity, reachability, and the reserved `type` field by hand. The `Checker` methods below are the same ones `bind` uses.
 
 The `Checker` methods you will use:
 
@@ -186,13 +207,32 @@ for (const declaration of file.declarations) {
 
 `cx.scope` is not recovery. Use it for parameters and locals. `examples/schema/schema.ts` opens a scope around each query so parameters and fields do not leak into the next query.
 
-Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, and `tokens`. The LSP reads composed facts, not your AST. Optional fields improve hover and completion:
+Facts are the editor contract. After `check`, `analyze` exposes `diagnostics`, `definitions`, `references`, `types`, `tokens`, and `scopes` (visibility extents; `visibleAt(facts, offset)` lists the names in scope). The LSP reads composed facts, not your AST. Optional fields improve hover and completion:
 
 - `show(type)` renders a checked type.
 - `describe(binding)` renders a definition, with `show` as the fallback.
-- `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. Items may set `insertText` when the displayed label should not be inserted verbatim.
+- `completions` adds words the grammar lexes as `Name`, such as `@primary` attributes or scalar types. `builtin` names in a `bind` block are added for you. Items may set `insertText` when the displayed label should not be inserted verbatim.
 
 The type kit is optional. `parlance/types` exports `TypeStore`, a mutable store with `mark` and `restore`, and `printType`. Calc uses it to infer `number` and `boolean`. Schema and machine use their own domain types.
+
+### Handle error nodes
+
+A repaired parse leaves `{ kind: "error", span }` where a node is missing and `{ text: "", missing: true }` where a token is, and the parser has already reported each one. The checker's job is to say nothing more:
+
+- Give `case "error"` to every switch over a union that includes `ErrorNode`; TypeScript reports the switch until you do. Return a placeholder IR and a type that agrees with anything:
+
+  ```ts
+  case "error":
+    context.result = store.error();
+    return { kind: "number", value: 0 };
+  ```
+
+- `isError(node)` (also `cx.isError`) narrows away `ErrorNode`; `isMissing(value)` is true for an error node or a missing token.
+- `cx.error`, `warn`, and `info` drop a report whose target is an error node or a missing token, so pass the node itself, not its `span`.
+- A missing (empty) name never resolves, and `declare`, `define`, `bind`, and `reference` skip it, so no "Unknown name" or empty definition follows.
+- `TypeStore.error()` is a poison type: it unifies with everything, a variable unified with it becomes error too, a union containing it is error, and it prints as `unknown`. Use it for a missing operand so `1 + ` does not also report "Expected number". A checker with its own types can use a fresh type variable, as advanced does.
+
+`tests/recovery.test.ts` checks that a missing operand, type, or name in each example produces only the parse diagnostic.
 
 Set `checkPartial: false` only when your checker cannot tolerate a tree with parse errors. The default is `true`, so editor facts survive while the user types.
 
@@ -354,7 +394,7 @@ import { schema } from "./examples/schema/schema.ts";
 export default { languages: [advanced, calc, machine, schema] };
 ```
 
-The config may default-export a `Language[]` or `{ languages }`. The CLI looks for `parlance.config.ts`, `.mts`, `.js`, or `.mjs` in the current directory, or takes `--config <path>`.
+The config may default-export a `Language[]` or `{ languages, resolve? }`; `resolve` replaces import resolution (see [05-modules](05-modules.md)). The CLI looks for `parlance.config.ts`, `.mts`, `.js`, or `.mjs` in the current directory, or takes `--config <path>`.
 
 A language can also resolve imports. Add `imports(file)` and `exports(module)` to the language value; the project's `ModuleGraph` resolves specifiers, analyzes dependencies first, and exposes exported bindings through `cx.imported` and `cx.dependencies`. The CLI, Node loader, content mapper, and LSP already read the graph, so no host code changes. [`docs/05-modules.md`](../docs/05-modules.md) is the design record.
 

@@ -1,4 +1,14 @@
-import { type Binding, Checker, type Dependency, type Facts, semanticTokens, type Token } from "./check/index.ts";
+import {
+  type Binding,
+  boundImports,
+  Checker,
+  type DefinitionKind,
+  type Dependency,
+  type Facts,
+  type ForeignSource,
+  semanticTokens,
+  type Token,
+} from "./check/index.ts";
 import { type Diagnostic, sortDiagnostics } from "./diagnostic.ts";
 import type { CompiledGrammar } from "./grammar/compile.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
@@ -21,6 +31,16 @@ export const importSpecifier = (literal: { readonly text: string; readonly span:
     // Keep the unescaped text; the graph will report a missing file.
   }
   return { specifier: value, span: { start: literal.span.start + 1, end: literal.span.end - 1 } };
+};
+
+/** True for a package specifier (`left-pad`, `@scope/pkg/x`), false for a relative path, absolute path, or URL. */
+export const isBareSpecifier = (specifier: string): boolean => !/^(\.{0,2}\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(specifier);
+
+/** A guest import of names from a non-guest module, such as a `.ts` file or a package. */
+export type ForeignImport = {
+  readonly specifier: Import;
+  /** The imported names and where each is written in the guest file. */
+  readonly names: readonly { readonly name: string; readonly span: Span }[];
 };
 
 export type Artifact = {
@@ -54,12 +74,21 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly check: (file: Ast, cx: Checker<Type>) => Ir;
   /** Declares the file's imports. The module graph parses, resolves, and analyzes them. */
   readonly imports?: (file: Ast) => readonly Import[];
+  /**
+   * Declares names imported from non-guest modules. The graph resolves each specifier (a missing
+   * file or unknown package is reported at the specifier) and the checker declares the names with
+   * `cx.foreign(type)`. `foreignImports` and `foreignRuntime` from `parlance/ts` emit them.
+   */
+  readonly foreign?: (file: Ast) => readonly ForeignImport[];
   /** The bindings this module exposes to importers. */
   readonly exports?: (module: Ir) => readonly Binding<Type>[];
   /** TypeScript surface, with source mappings where identifiers correspond to guest text. */
   readonly typescript?: (module: Ir) => TsDoc;
-  /** ES module source for the Node loader. */
-  readonly runtime?: (module: Ir) => string;
+  /**
+   * ES module source for the Node loader. A `TsDoc` carries mappings to guest spans; the loader turns
+   * them into an inline source map so `node --enable-source-maps` shows guest positions in stacks.
+   */
+  readonly runtime?: (module: Ir) => string | TsDoc;
   /** Additional emit targets, keyed by name. */
   readonly targets?: Readonly<Record<string, (module: Ir) => Artifact>>;
   /** Hover rendering for a type. */
@@ -68,6 +97,13 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly completions?: readonly Completion[];
   /** Optional hover text for a definition, before falling back to `show(type)`. */
   readonly describe?: (binding: Binding<Type>) => string | undefined;
+  /** Show binding types as inlay hints (needs `show`). Defaults to true. */
+  readonly inlayHints?: boolean;
+  /**
+   * Snippets inside TypeScript files: `tag("Key")\`...\``. The content mapper types them through a
+   * `.embeds` stub, the Node loader runs them, and the LSP serves them inside `.ts` buffers.
+   */
+  readonly embed?: { readonly tag: string };
   /** Check a tree that has parse errors. Defaults to true so editor facts survive typing. */
   readonly checkPartial?: boolean;
 };
@@ -78,9 +114,50 @@ export type LanguageOptions<Ast, Ir, Type> = Omit<Language<Ast, Ir, Type>, "chec
   readonly checkPartial?: boolean;
 };
 
+const completionOf = (kind: DefinitionKind): CompletionKind => {
+  switch (kind) {
+    case "function":
+    case "method":
+    case "macro":
+      return "function";
+    case "variable":
+    case "parameter":
+      return "variable";
+    case "property":
+    case "enumMember":
+      return kind;
+    case "constant":
+    case "namespace":
+    case "event":
+      return "constant";
+    default:
+      return "type";
+  }
+};
+
+/**
+ * A grammar's `bind` block supplies defaults: `import` lines become `imports` and `builtin` names
+ * become completions. An explicit `imports` wins; explicit completions come first.
+ */
 export const defineLanguage = <Ast, Ir, Type = unknown>(
   language: LanguageOptions<Ast, Ir, Type>,
-): Language<Ast, Ir, Type> => language;
+): Language<Ast, Ir, Type> => {
+  const spec = language.grammar.bind;
+  if (!spec) return language;
+  const explicit = new Set((language.completions ?? []).map((completion) => completion.label));
+  const builtins = spec.builtins.filter((entry) => !explicit.has(entry.name)).map((entry): Completion => ({
+    label: entry.name,
+    kind: completionOf(entry.kind),
+    detail: entry.label,
+  }));
+  return {
+    ...language,
+    ...(language.imports !== undefined || spec.imports.length === 0
+      ? {}
+      : { imports: (file: Ast) => boundImports(file, spec).map(importSpecifier) }),
+    ...(builtins.length === 0 ? {} : { completions: [...(language.completions ?? []), ...builtins] }),
+  };
+};
 
 export type Analysis<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly language: Language<Ast, Ir, Type>;
@@ -104,6 +181,8 @@ export type AnalysisContext<Type = unknown> = {
   readonly dependencies?: readonly Dependency<Type>[];
   /** Diagnostics produced before checking, such as unresolved imports or cycles. */
   readonly diagnostics?: readonly Diagnostic[];
+  /** Resolved non-guest imports, for `Checker.foreign`. */
+  readonly foreign?: readonly ForeignSource[];
 };
 
 /** Parse, check, and collect every fact the editor and hosts need. Never throws on guest input. */
@@ -130,6 +209,7 @@ export const analyzeParsed = <Ast, Ir, Type>(
     [],
     [...parsed.diagnostics, ...(context.diagnostics ?? [])],
     context.dependencies ?? [],
+    context.foreign ?? [],
   );
   let ir: Ir | null = null;
   if (parsed.value !== null && (parsed.ok || language.checkPartial !== false)) {
@@ -143,6 +223,7 @@ export const analyzeParsed = <Ast, Ir, Type>(
       ir = null;
     }
   }
+  checker.seal();
   const diagnostics = sortDiagnostics(checker.facts.diagnostics);
   let tokenCache: Token[] | null = null;
   const tokens = (): Token[] => {

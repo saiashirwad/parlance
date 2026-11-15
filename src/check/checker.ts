@@ -4,7 +4,8 @@ import {
   diagnostic,
   type Related,
 } from "../diagnostic.ts";
-import type { Span } from "../source.ts";
+import type { ErrorNode, Span } from "../source.ts";
+import { didYouMean } from "./suggest.ts";
 import {
   type Binding,
   type DefinitionKind,
@@ -18,6 +19,13 @@ import {
 export type Spanned = { readonly span: Span };
 
 export const at = (value: Span | Spanned): Span => "start" in value ? value : value.span;
+
+/** A zero-width error node a repair parse left where a node is missing. */
+export const isError = (value: object): value is ErrorNode => (value as { readonly kind?: unknown }).kind === "error";
+
+/** An error node or a missing token (`{ text: "", missing: true }`): syntax the parser already reported. */
+export const isMissing = (value: Span | Spanned): boolean =>
+  isError(value) || (value as { readonly missing?: unknown }).missing === true;
 
 /** One analyzed dependency, as seen by a checker. */
 export type Dependency<Type = unknown> = {
@@ -39,6 +47,20 @@ export type Dependencies<Type = unknown> = {
   readonly of: (specifier: string) => Dependency<Type> | undefined;
 };
 
+/** A name imported from a non-guest module, as declared by `Language.foreign` and resolved by the graph. */
+export type ForeignSource = {
+  /** The specifier exactly as written. */
+  readonly specifier: string;
+  /** The specifier's span in the importing file. */
+  readonly span: Span;
+  /** The resolved document URI, or null when resolution failed (already reported). */
+  readonly uri: string | null;
+  readonly names: readonly { readonly name: string; readonly span: Span }[];
+};
+
+/** A foreign import after `Checker.foreign` declared its names; `bindings` parallels `names`. */
+export type ForeignModule<Type = unknown> = ForeignSource & { readonly bindings: readonly Binding<Type>[] };
+
 class AbortCheck extends Error {
   constructor() {
     super("check aborted");
@@ -59,7 +81,11 @@ export class Checker<T = unknown> {
   readonly source: string;
   readonly facts: Facts<T>;
   readonly dependencies: Dependencies<T>;
+  readonly #foreign: readonly ForeignSource[];
   readonly #scopes: Map<string, Binding<T>>[] = [new Map()];
+  /** Parallel to `#scopes`: bindings bound there that still need a visibility extent. */
+  readonly #bound: Binding<T>[][] = [[]];
+  readonly #extended = new Set<number>();
   readonly #imported = new Map<string, Binding<T>>();
   #nextBinding = 1;
   #references = new Set<string>();
@@ -70,7 +96,9 @@ export class Checker<T = unknown> {
     tokens: readonly Token[] = [],
     diagnostics: readonly Diagnostic[] = [],
     dependencies: readonly Dependency<T>[] = [],
+    foreign: readonly ForeignSource[] = [],
   ) {
+    this.#foreign = foreign;
     this.uri = uri;
     this.source = source;
     this.facts = emptyFacts<T>([...diagnostics], [...tokens], uri);
@@ -84,31 +112,107 @@ export class Checker<T = unknown> {
     return diagnostic(message, at(value), options);
   }
 
+  /** A guard for error nodes; see `isError`. */
+  isError(value: object): value is ErrorNode {
+    return isError(value);
+  }
+
+  /** True for an error node or a missing token; see `isMissing`. */
+  isMissing(value: Span | Spanned): boolean {
+    return isMissing(value);
+  }
+
+  /**
+   * Reports at `value`. A report at an error node or a missing token is dropped:
+   * the parser already reported it, and a second message would only cascade.
+   */
   error(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "error" }));
   }
 
+  /**
+   * Reports an unknown name as `Unknown <noun> "<name>"`, with a "did you mean" quick fix for the
+   * nearest name in `candidates` (default: the names in scope here).
+   */
+  unknown(noun: string, name: string, value: Span | Spanned, candidates?: Iterable<string>): void {
+    if (isMissing(value)) return;
+    const names = candidates ?? this.#scopes.flatMap((scope) => [...scope.keys()]);
+    const fix = didYouMean(name, at(value), names);
+    this.error(`Unknown ${noun} ${JSON.stringify(name)}`, value, fix === undefined ? {} : { fix });
+  }
+
   warn(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "warning" }));
   }
 
   info(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "info" }));
   }
 
-  /** Runs `body` in a child lexical scope, restoring the parent even if it throws. */
-  scope<A>(body: () => A): A {
+  /**
+   * Runs `body` in a child lexical scope, restoring the parent even if it throws. Pass the node's
+   * span when you have it: completion uses it as the extent where the scope's names are visible.
+   * Without it the extent is inferred from the facts recorded inside `body`.
+   */
+  scope<A>(body: () => A): A;
+  scope<A>(extent: Span | Spanned, body: () => A): A;
+  scope<A>(first: Span | Spanned | (() => A), second?: () => A): A {
+    const body = typeof first === "function" ? first : second!;
+    const given = typeof first === "function" ? undefined : at(first);
+    const { definitions, references, types } = this.facts;
+    const before = [definitions.length, references.length, types.length] as const;
     this.#scopes.push(new Map());
+    this.#bound.push([]);
     try {
       return body();
     } finally {
       this.#scopes.pop();
+      const bound = this.#bound.pop()!;
+      if (bound.length > 0) {
+        let start = given?.start ?? Infinity;
+        let end = given?.end ?? -1;
+        if (given === undefined) {
+          const widen = (span: Span): void => {
+            if (span.start < start) start = span.start;
+            if (span.end > end) end = span.end;
+          };
+          for (let i = before[0]; i < definitions.length; i++) widen(definitions[i]!.span);
+          for (let i = before[1]; i < references.length; i++) widen(references[i]!.span);
+          for (let i = before[2]; i < types.length; i++) widen(types[i]!.span);
+        }
+        if (end >= 0) this.#extend(bound, { start, end });
+      }
     }
   }
 
-  /** Adds a binding to the current scope. */
+  /** Records the extent where `id` is visible (a `bind` block records its own). */
+  visible(id: number, span: Span): void {
+    this.#extended.add(id);
+    this.facts.scopes.push({ id, span });
+  }
+
+  /** Records extents for names bound in the file scope. Called once, after checking. */
+  seal(): void {
+    this.#extend(this.#bound[0]!, { start: 0, end: this.source.length });
+    this.#bound[0]!.length = 0;
+  }
+
+  #extend(bound: readonly Binding<T>[], span: Span): void {
+    for (const binding of bound) {
+      if (this.#extended.has(binding.id)) continue;
+      this.#extended.add(binding.id);
+      this.facts.scopes.push({ id: binding.id, span });
+    }
+  }
+
+  /** Adds a binding to the current scope. A missing (empty) name is never bound. */
   bind(binding: Binding<T>): Binding<T> {
+    if (binding.name === "") return binding;
     this.#scopes[this.#scopes.length - 1]!.set(binding.name, binding);
+    this.#bound[this.#bound.length - 1]!.push(binding);
     return binding;
   }
 
@@ -117,7 +221,10 @@ export class Checker<T = unknown> {
     for (const binding of bindings) this.bind(binding);
   }
 
-  /** Records a definition. The definition is not in scope until `bind`. */
+  /**
+   * Records a definition. The definition is not in scope until `bind`.
+   * A missing (empty) name, from a repaired parse, gets a binding that is not recorded.
+   */
   declare(
     name: string,
     value: Span | Spanned,
@@ -134,12 +241,35 @@ export class Checker<T = unknown> {
       ...(extra.uri === undefined ? {} : { uri: extra.uri }),
       ...(extra.detail === undefined ? {} : { detail: extra.detail }),
     };
-    this.facts.definitions.push(binding);
+    if (name !== "") this.facts.definitions.push(binding);
     return binding;
   }
 
-  /** Looks up a name and records a reference when found. */
+  /**
+   * Declares and binds every name the language imported from a non-guest module, typed `type`.
+   * Pass a type that unifies with anything (an unknown or poison type): the guest checker cannot
+   * know the TypeScript type, so it must not report uses. The TypeScript surface carries the real
+   * check. A name that is already in scope is reported and left unbound.
+   */
+  foreign(type: T): readonly ForeignModule<T>[] {
+    return this.#foreign.map((group) => ({
+      ...group,
+      bindings: group.names.map((entry) => {
+        const binding = this.declare(entry.name, entry.span, "variable", type, {
+          detail: `from ${JSON.stringify(group.specifier)}`,
+        });
+        if (entry.name !== "" && this.resolve(entry.name, undefined)) {
+          this.error(`Duplicate name ${JSON.stringify(entry.name)}`, entry.span);
+          return binding;
+        }
+        return this.bind(binding);
+      }),
+    }));
+  }
+
+  /** Looks up a name and records a reference when found. A missing (empty) name finds nothing. */
   resolve(name: string, value: Span | Spanned | undefined): Binding<T> | undefined {
+    if (name === "") return undefined;
     let found: Binding<T> | undefined;
     for (let index = this.#scopes.length - 1; index >= 0; index--) {
       found = this.#scopes[index]!.get(name);
@@ -180,6 +310,7 @@ export class Checker<T = unknown> {
   }
 
   reference(binding: { readonly id: number; readonly uri?: string }, value: Span | Spanned): void {
+    if (isMissing(value)) return;
     const span = at(value);
     const key = `${binding.id}:${span.start}:${span.end}`;
     if (this.#references.has(key)) return;
@@ -193,6 +324,7 @@ export class Checker<T = unknown> {
 
   /** Records a binding's type at its definition site as well. */
   define(binding: Binding<T>, value: Span | Spanned, type: T): Binding<T> {
+    if (binding.name === "") return { ...binding, type };
     this.typed(value, type);
     this.facts.definitions.push({ ...binding, type });
     return { ...binding, type };

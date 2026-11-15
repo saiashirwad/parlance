@@ -53,7 +53,7 @@ machine Order {
 ```
 
 Schema and calc add `Import` as a `Decl` alternative; machine adds it as an `Event` alternative.
-The checkers skip those nodes. Because the root rule is still `Decl*`, the incremental parser keeps
+The checkers skip those nodes. Calc and machine declare them with an `import import.specifier` line in their `bind` block, which `defineLanguage` turns into `imports`. Because the root rule is still `Decl*`, the incremental parser keeps
 working for the existing single-file examples.
 
 ## Graph
@@ -119,6 +119,50 @@ The diagnostic is reported at the specifier of the import that closes the cycle 
 visited. That file is analyzed with the cyclic edge omitted, so names from the unresolved edge stay
 unknown. The entry's routed view then shows the cycle diagnostic at its own import site. No
 recursion continues and the walk terminates.
+
+## Non-guest imports
+
+A specifier that resolves to a file no registered language owns (`./rates.ts`, a package file) is an external
+edge: the graph does not analyze it and does not re-read it. It reports `Cannot resolve import` at the specifier
+only when the file does not exist.
+
+A bare specifier resolves by Node package resolution from the importer's directory (`node_modules`, package
+`exports`). An unknown package is a diagnostic at the specifier. To change resolution, export `resolve` from the
+project config; it reaches the CLI, the Node loader (`registerLanguages(languages, { resolve })`), the LSP, and the
+content mapper:
+
+```ts
+import { defaultResolve } from "parlance/modules";
+export default {
+  languages: [calc],
+  resolve: (specifier, from) => specifier.startsWith("@app/") ? new URL(`./src/${specifier.slice(5)}`, from).href : defaultResolve(specifier, from),
+};
+```
+
+## Foreign imports
+
+A language imports names from TypeScript with `Language.foreign`:
+
+```ts
+foreign?: (file: Ast) => readonly { specifier: Import; names: readonly { name: string; span: Span }[] }[];
+```
+
+The graph resolves each specifier like an import. In the checker, `cx.foreign(type)` declares and binds every name
+with `type`; pass one that unifies with anything (calc passes `store.unknown()`), so the guest checker never
+reports a use of a name it cannot type. From `parlance/ts`, `foreignImports(module.foreign)` emits the mapped
+`import { a } from "spec";` for the TypeScript surface and `foreignRuntime(module.foreign, local)` emits the runtime
+import (a bare specifier becomes its resolved file URL).
+
+Calc uses `from "./rates.ts" use taxRate;`. A calc file with foreign imports gets a surface made of its guest
+expressions verbatim, so tsgo infers types and reports errors at the guest span, and hover and definition reach
+`rates.ts`. See `examples/calc/priced.calc`, `examples/typescript/priced.ts`, and `runpriced.ts`.
+
+## Runtime-visible bindings
+
+`Binding.runtime` says how an importer's emitted module sees an export: undefined (same name), a string (another
+export name), or `false` (no runtime value). Schema marks its models, enums, and queries `false`, since its module
+exports only `sql` and `open`. Calc skips such names in its runtime `import` and reports
+`"User" is not available at runtime` where an expression uses one.
 
 ## Checker view
 
@@ -204,8 +248,9 @@ second import specifier. The same declaration reached through a diamond is allow
 
 ## Not done
 
-- No re-export syntax and no named import lists: an import exposes every export of the dependency.
-- No package or bare-specifier resolution. Only URL-relative specifiers resolve.
+- No re-export syntax and no named import lists in guest-to-guest imports: an import exposes every export of the dependency. A language can re-export by returning imported bindings from `exports(ir)`; calc does not.
+- Bare specifiers resolve with `createRequire(from).resolve`, so a package that only defines an `import` export condition does not resolve. Supply a `resolve` in the config for those.
+- A foreign import brings in names only: no default or namespace imports, and no types. Use TypeScript for those.
 - Calc copies binding types from the dependency's `TypeStore`. Closed types (primitives, literals,
   records, arrays, functions) are reliable. A free variable keeps the dependency store's numeric id,
   which can collide with an unrelated variable in the importing store; only closed types should be

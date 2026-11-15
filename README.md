@@ -53,7 +53,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 });
 ```
 
-`grammar` is a `CompiledGrammar<File>` compiled from `examples/calc/calc.parl`. `check` turns the AST into `CalcModule`. `types` returns a `TsDoc`; `runtime` returns an ES module source string. Only `name`, `extensions`, `grammar`, and `check` are required. `typescript`, `runtime`, `targets`, `show`, `describe`, and `checkPartial` are optional. [`docs/04-authoring.md`](docs/04-authoring.md) builds each piece in order.
+`grammar` is a `CompiledGrammar<File>` compiled from `examples/calc/calc.parl`. `check` turns the AST into `CalcModule`. `types` returns a `TsDoc`; `runtime` returns an ES module source string. Only `name`, `extensions`, `grammar`, and `check` are required. `typescript`, `runtime`, `targets`, `show`, `describe`, `embed`, and `checkPartial` are optional. [`docs/04-authoring.md`](docs/04-authoring.md) builds each piece in order.
 
 ## Examples
 
@@ -72,16 +72,20 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
 - [`docs/06-neovim.md`](docs/06-neovim.md): project-local LSP wiring, keymaps, verification, and troubleshooting.
 - [`docs/07-comparison.md`](docs/07-comparison.md): common-grammar parser throughput against the old langkit checkout.
+- [`docs/08-embedding.md`](docs/08-embedding.md): keyed guest snippets inside `.ts` files, typed, run, and served in the editor.
 
 ## Status
 
 Working:
 
-- `.parl` compilation with static checks, root-item recovery, and a self-hosted grammar.
-- Checker, facts, semantic tokens, and the generic LSP (diagnostics, hover, definition, references, symbols, folding, completion, cross-file definition, references, and rename).
-- Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph.
+- `.parl` compilation with static checks, nested error recovery (a failed item is repaired in place with error nodes and missing tokens, typed in the generated ASTs), and a self-hosted grammar.
+- Checker helpers for repaired trees: `isError`/`isMissing`, reports at missing syntax are dropped, and a poison `TypeStore.error()`, so a missing operand or name yields only the parse diagnostic.
+- Declarative name binding: a `bind { ... }` block in `.parl` (defs, refs, hoisted, sequential, and field scopes, members, builtins, `unique`, imports) that calc and machine use; it records scope extents in facts, and `cx.scope`/`cx.bind` record them for hand-written checkers.
+- Checker, facts, and the generic LSP: diagnostics with quick fixes (including "did you mean" for unknown names), hover, definition, references, document and workspace symbols, folding, scope-aware completion, inlay hints, semantic tokens (full, delta, range, with declaration and readonly modifiers), cross-file definition, references, and rename.
+- Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph. Imports can also name TypeScript files and packages (bare specifiers, a `resolve` hook in `parlance.config.ts`): calc's `from "./rates.ts" use taxRate;` is checked by tsgo through the generated surface, with errors at the guest span.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
-- A Node loader that runs guest files without a build step.
+- A Node loader that runs guest files without a build step. A `runtime` that returns a `TsDoc` gets an inline source map, so stack traces show guest positions under `--enable-source-maps`.
+- Snippets inside real `.ts` files: `schema("Blog")` followed by a template is typed through a `.embeds` stub the content mapper owns, runs under the Node loader, and gets diagnostics, hover, definition, completion, and tokens from the parlance LSP in TypeScript buffers. Holes are not supported yet.
 - Named targets with `parlance emit`.
 - Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in about 20 ms, or 16% of a full parse, with 99,998 of 100,000 items reused. On a 50 KB file an edit plus analyze takes about 1.6 ms. The LSP uses it; the checker still runs over the whole file.
 - The advanced, calc, schema, and machine examples, exercised by `pnpm check`.
@@ -90,8 +94,7 @@ Not built:
 
 - Incremental checking.
 - Formatting.
-- Workspace symbols and signature help.
-- Source maps for runtime stack traces.
+- Signature help.
 - Publishing. The package is private and has no 1.0 milestone.
 
 Open gaps are tracked at <https://github.com/saiashirwad/parlance/issues>.

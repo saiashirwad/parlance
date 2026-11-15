@@ -6,6 +6,12 @@ export type SourceLocation = { readonly uri: string; readonly span: Span };
 
 export type Related = { readonly location: SourceLocation; readonly message: string };
 
+/** A text replacement in the reported document. */
+export type Edit = { readonly span: Span; readonly newText: string };
+
+/** A quick fix an editor can apply for a diagnostic. */
+export type Fix = { readonly title: string; readonly edits: readonly Edit[] };
+
 export type Diagnostic = {
   readonly message: string;
   readonly severity: Severity;
@@ -13,6 +19,8 @@ export type Diagnostic = {
   readonly code?: string;
   readonly context?: readonly string[];
   readonly related?: readonly Related[];
+  /** An edit that resolves the diagnostic, offered as an editor quick fix. */
+  readonly fix?: Fix;
   /** Where the error originated, when it is not the reported document. */
   readonly origin?: SourceLocation;
   /** Where the error should be shown, when that differs from `origin`. */
@@ -24,6 +32,7 @@ export type DiagnosticOptions = {
   readonly context?: readonly string[];
   readonly related?: readonly Related[];
   readonly severity?: Severity;
+  readonly fix?: Fix;
 };
 
 export const diagnostic = (message: string, at: Span, options: DiagnosticOptions = {}): Diagnostic => ({
@@ -33,6 +42,7 @@ export const diagnostic = (message: string, at: Span, options: DiagnosticOptions
   ...(options.code === undefined ? {} : { code: options.code }),
   ...(options.context === undefined ? {} : { context: options.context }),
   ...(options.related === undefined ? {} : { related: options.related }),
+  ...(options.fix === undefined ? {} : { fix: options.fix }),
 });
 
 export const error = (message: string, at: Span, options: Omit<DiagnosticOptions, "severity"> = {}): Diagnostic =>

@@ -16,6 +16,7 @@ import {
   type TsDoc,
   type TsNode,
 } from "../src/ts/template.ts";
+import { sourceMap, withSourceMap } from "../src/ts/sourcemap.ts";
 import { typeText, type TsType } from "../src/ts/type.ts";
 
 test("nested templates produce an exact interface snapshot", () => {
@@ -390,4 +391,15 @@ test("property: template mappings match an independent flattening", () => {
       previousEnd = start + length;
     }
   }
+});
+
+test("a source map starts a segment at each mapping and leaves the gaps unmapped", () => {
+  // Generated: "let a = b;\nuse(a);\n". `a` is guest line 1 col 4; `use` is guest line 2 col 0.
+  const guest = "x\nlet a\nuse";
+  const text = ts`let ${verbatim("a", span(6, 7))} = b;${"\n"}${atom("use", span(8, 11))}(a);${"\n"}`;
+  const map = sourceMap(text, guest, "file:///g.calc");
+  // Line 0: col 4 -> (guest line 1, col 4) then unmapped at col 5; line 1: col 0 -> (line 2, col 0), unmapped at col 3.
+  assert.equal(map.mappings, "IACI,C;AACJ,G;");
+  assert.deepEqual(map.sources, ["file:///g.calc"]);
+  assert.match(withSourceMap(text, guest, "file:///g.calc"), /\n\/\/# sourceMappingURL=data:application\/json;base64,[A-Za-z0-9+/=]+\n$/);
 });

@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { discoverConfig, loadLanguages } from "../config.ts";
+import { discoverConfig, loadProject } from "../config.ts";
 import { serve } from "./server.ts";
 
 const args = process.argv.slice(2);
@@ -13,12 +13,12 @@ if (!path) {
 }
 
 try {
-  const languages = await loadLanguages(path);
+  const { languages, resolve: resolver } = await loadProject(path);
   if (languages.length === 0) {
     console.error(`${path} exports no languages.`);
     process.exit(1);
   }
-  serve(languages);
+  serve(languages, resolver ? { resolve: resolver } : {});
 } catch (cause) {
   console.error(`Cannot load ${path}: ${cause instanceof Error ? cause.message : String(cause)}`);
   process.exit(1);

@@ -69,6 +69,11 @@ const steps: readonly Step[] = [
     expect: ["250\n250 125 true"],
   },
   {
+    name: "run calc that imports TypeScript through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/typescript/runpriced.ts"],
+    expect: ["tax: 20 20"],
+  },
+  {
     name: "run imported examples through the Node loader",
     command: [
       "node",
@@ -89,6 +94,11 @@ const steps: readonly Step[] = [
     name: "run imported schema through TypeScript",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/catalog.ts"],
     expect: ["1 1 Tools"],
+  },
+  {
+    name: "run TypeScript with embedded snippets through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/embed/app.ts"],
+    expect: ["sai@example.com Admin 125 true"],
   },
   {
     name: "run machine through the Node loader",

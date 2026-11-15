@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { calc, type CalcModule } from "../examples/calc/calc.ts";
 import { schema, type SchemaModule } from "../examples/schema/schema.ts";
-import { ModuleGraph } from "../src/modules.ts";
+import { loadProject } from "../src/config.ts";
+import { defaultResolve, ModuleGraph } from "../src/modules.ts";
 import { definitionAt } from "../src/check/index.ts";
 import type { AnyLanguage } from "../src/language.ts";
 
@@ -158,7 +162,8 @@ test("calc resolves an imported value and emits a real module import", () => {
   assert.deepEqual(analysis.diagnostics, []);
   const module = analysis.ir as CalcModule;
   assert.equal(module.imports[0]!.specifier, "./lib.calc");
-  const runtime = calc.runtime!(module);
+  const emitted = calc.runtime!(module);
+  const runtime = typeof emitted === "string" ? emitted : emitted.text;
   assert.match(runtime, /import \{ base as _v0, limit as _v1 \} from "\.\/lib\.calc";/);
   const surface = calc.typescript!(module).text;
   assert.match(surface, /export declare const total/);
@@ -211,7 +216,8 @@ test("two imports exporting the same name report at the second specifier", () =>
   const conflict = analysis.diagnostics.find((entry) => /also exports "base"/.test(entry.message));
   assert.ok(conflict, analysis.diagnostics.map((entry) => entry.message).join("\n"));
   assert.equal(analysis.source.slice(conflict.span.start, conflict.span.end), "./lib2.calc");
-  const runtime = calc.runtime!(analysis.ir as CalcModule);
+  const emitted = calc.runtime!(analysis.ir as CalcModule);
+  const runtime = typeof emitted === "string" ? emitted : emitted.text;
   assert.match(runtime, /from "\.\/lib1\.calc"/);
   assert.doesNotMatch(runtime, /from "\.\/lib2\.calc"/);
 });
@@ -270,4 +276,130 @@ test("the Node loader runs imported guest files", () => {
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /250 true/);
+});
+test("a non-guest import is an external edge: not analyzed, reported only when missing", () => {
+  const source = "schema A\nimport \"./helper.ts\";\nimport \"./gone.ts\";\nmodel A { id: Int @primary }\n";
+  const graph = memory({ "memory://dir/a.schema": source, "memory://dir/helper.ts": "export const x = 1;\n" });
+  const first = graph.analyze("memory://dir/a.schema");
+  const missing = first.diagnostics.filter((entry) => /Cannot resolve import/.test(entry.message));
+  assert.equal(missing.length, 1, first.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(source.slice(missing[0]!.span.start, missing[0]!.span.end), "./gone.ts");
+  const edge = graph.node("memory://dir/a.schema")!.imports[0]!;
+  assert.equal(edge.external, true);
+  assert.equal(edge.node, null);
+  assert.deepEqual(graph.order(), ["memory://dir/a.schema"]);
+  // An external edge does not force a rebuild.
+  assert.equal(graph.analyze("memory://dir/a.schema"), first);
+});
+test("a bare specifier resolves through Node package resolution; an unknown package reports at the specifier", () => {
+  const source = "schema A\nimport \"vscode-languageserver-textdocument\";\nimport \"no-such-package\";\nmodel A { id: Int @primary }\n";
+  const uri = new URL("a.schema", import.meta.url).href;
+  const analysis = new ModuleGraph({ languages: [schema], read: (id) => (id === uri ? source : null) }).analyze(uri);
+  const missing = analysis.diagnostics.filter((entry) => /Cannot resolve import/.test(entry.message));
+  assert.equal(missing.length, 1, analysis.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(source.slice(missing[0]!.span.start, missing[0]!.span.end), "no-such-package");
+});
+
+test("a custom resolve replaces the default and loads from a project config", async () => {
+  const resolve = (specifier: string, from: string) =>
+    specifier.startsWith("@lib/") ? `memory://lib/${specifier.slice(5)}` : defaultResolve(specifier, from);
+  const files = {
+    "memory://dir/a.schema": "schema A\nimport \"@lib/b.schema\";\nquery users(): User[] = User |> all;\n",
+    "memory://lib/b.schema": "schema B\nmodel User { id: Int @primary }\n",
+  };
+  const graph = new ModuleGraph({ languages: [schema], read: (uri) => files[uri as keyof typeof files] ?? null, resolve });
+  assert.deepEqual(graph.analyze("memory://dir/a.schema").diagnostics, []);
+
+  const directory = mkdtempSync(join(tmpdir(), "parlance-config-"));
+  try {
+    writeFileSync(join(directory, "parlance.config.mjs"), "export default { languages: [], resolve: (s) => s };\n");
+    const project = await loadProject(join(directory, "parlance.config.mjs"));
+    assert.equal(project.resolve?.("x", "y"), "x");
+  } finally {
+    rmSync(directory, { recursive: true });
+  }
+});
+test("foreign imports declare opaque names, report a missing file at the specifier, and emit mapped imports", () => {
+  const source = 'from "./rates.ts" use taxRate;\nfrom "./gone.ts" use nothing;\nlet tax = 100 * taxRate;\nshow tax;\n';
+  const files = { "memory://dir/a.calc": source, "memory://dir/rates.ts": "export const taxRate = 0.2;\n" };
+  const analysis = memory(files, [calc]).analyze("memory://dir/a.calc");
+  const messages = analysis.diagnostics.map((entry) => entry.message);
+  assert.deepEqual(messages, ['Cannot resolve import "./gone.ts"']);
+  assert.equal(source.slice(analysis.diagnostics[0]!.span.start, analysis.diagnostics[0]!.span.end), "./gone.ts");
+  const module = analysis.ir as CalcModule;
+  const surface = calc.typescript!(module);
+  assert.match(surface.text, /^import \{ taxRate \} from "\.\/rates\.ts";\nimport \{ nothing \} from "\.\/gone\.ts";/);
+  assert.match(surface.text, /export const tax = 100 \* taxRate;/);
+  const runtime = calc.runtime!(module);
+  assert.match(typeof runtime === "string" ? runtime : runtime.text, /^import \{ taxRate as _v0 \} from "\.\/rates\.ts";/);
+});
+
+test("a foreign name that is already defined is reported", () => {
+  const source = 'from "./rates.ts" use taxRate, taxRate;\nshow taxRate;\n';
+  const analysis = memory({ "memory://dir/a.calc": source, "memory://dir/rates.ts": "" }, [calc]).analyze("memory://dir/a.calc");
+  assert.deepEqual(analysis.diagnostics.map((entry) => entry.message), ['Duplicate name "taxRate"']);
+});
+
+test("calc imports a TypeScript file at runtime through the Node loader", () => {
+  const script = "const m = await import('./examples/calc/priced.calc'); console.log(m.default, m.tax);";
+  const result = spawnSync(process.execPath, ["--import", "./examples/register.ts", "--input-type=module", "-e", script], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^20\n20 20\n$/);
+});
+
+test("a calc file can import a schema file: models are not runtime values", () => {
+  const files = {
+    "memory://dir/a.calc": 'use "./b.schema";\nlet n = 1;\nshow User;\n',
+    "memory://dir/b.schema": "schema B\nmodel User { id: Int @primary }\n",
+  };
+  const analysis = memory(files, [calc, schema]).analyze("memory://dir/a.calc");
+  const messages = analysis.diagnostics.map((entry) => entry.message);
+  assert.deepEqual(messages, ['"User" is not available at runtime']);
+  const clean = memory({ ...files, "memory://dir/a.calc": 'use "./b.schema";\nlet n = 1;\nshow n;\n' }, [calc, schema])
+    .analyze("memory://dir/a.calc");
+  assert.deepEqual(clean.diagnostics, []);
+  const runtime = calc.runtime!(clean.ir as CalcModule);
+  assert.doesNotMatch(typeof runtime === "string" ? runtime : runtime.text, /import/);
+});
+
+test("the Node loader runs a calc file that imports a schema file", () => {
+  const dir = mkdtempSync(join(root, ".tmp-interop-"));
+  try {
+    writeFileSync(join(dir, "m.schema"), "schema M\nmodel User { id: Int @primary }\n");
+    writeFileSync(join(dir, "a.calc"), 'use "./m.schema";\nlet n = 41 + 1;\nshow n;\n');
+    const script = `const m = await import(${JSON.stringify(join(dir, "a.calc"))}); console.log(m.default);`;
+    const result = spawnSync(process.execPath, ["--import", "./examples/register.ts", "--input-type=module", "-e", script], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /42/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});
+test("a language can re-export imported bindings and keep their defining document", () => {
+  const reexporting: AnyLanguage = {
+    ...calc,
+    exports: (module: CalcModule) => [
+      ...calc.exports!(module),
+      ...module.imports.flatMap((group) => group.bindings.map(({ binding }) => binding)),
+    ],
+  };
+  const files = {
+    "memory://dir/c.calc": "let x = 1;\n",
+    "memory://dir/b.calc": 'use "./c.calc";\nlet y = x + 1;\n',
+    "memory://dir/a.calc": 'use "./b.calc";\nshow x + y;\n',
+  };
+  const graph = memory(files, [reexporting]);
+  const analysis = graph.analyze("memory://dir/a.calc");
+  assert.deepEqual(analysis.diagnostics, []);
+  assert.deepEqual([...graph.node("memory://dir/b.calc")!.exports.keys()].sort(), ["x", "y"]);
+  const reexported = graph.node("memory://dir/b.calc")!.exports.get("x")!;
+  assert.equal(reexported.uri, "memory://dir/c.calc");
+  const at = files["memory://dir/a.calc"].indexOf("x + y");
+  assert.equal(definitionAt(analysis.facts, at)?.uri, "memory://dir/c.calc");
 });

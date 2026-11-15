@@ -16,4 +16,6 @@ export {
   type TsValue,
   verbatim,
 } from "./template.ts";
+export { type RawSourceMap, sourceMap, withSourceMap } from "./sourcemap.ts";
+export { foreignImports, foreignRuntime } from "./foreign.ts";
 export { typeText, type TsType } from "./type.ts";

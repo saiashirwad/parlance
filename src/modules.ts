@@ -1,13 +1,15 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Binding, Dependency } from "./check/index.ts";
+import type { Binding, Dependency, ForeignSource } from "./check/index.ts";
 import { type Diagnostic, error, route, withDocument } from "./diagnostic.ts";
 import {
   type Analysis,
   analyzeParsed,
   type AnyLanguage,
   type Import,
+  isBareSpecifier,
 } from "./language.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
 import type { ParseResult } from "./parser/parse.ts";
@@ -16,6 +18,8 @@ export type ResolvedImport = {
   readonly import: Import;
   readonly uri: string | null;
   readonly node: ModuleNode | null;
+  /** The target exists but is not a guest document (a `.ts` file, a package). It is not analyzed. */
+  readonly external?: boolean;
 };
 
 export type ModuleNode = {
@@ -31,7 +35,7 @@ export type ModuleGraphOptions = {
   readonly languages: readonly AnyLanguage[];
   /** Returns file text, or null when the document does not exist. Defaults to the filesystem. */
   readonly read?: (uri: string) => string | null;
-  /** Returns the resolved document URI, or null. Defaults to URL resolution from the importer. */
+  /** Returns the resolved document URI, or null. Defaults to `defaultResolve`. */
   readonly resolve?: (specifier: string, from: string) => string | null;
 };
 
@@ -41,6 +45,8 @@ export type AnalyzeOptions = {
   /** An already parsed entry document, as the LSP produces after an incremental reparse. */
   readonly parsed?: ParseResult<unknown>;
   readonly incremental?: IncrementalStats | null;
+  /** The entry's language, for a URI whose path does not name one, such as an embedded snippet. */
+  readonly language?: AnyLanguage;
 };
 
 const scheme = /^[A-Za-z][A-Za-z0-9+.-]*:/;
@@ -69,14 +75,22 @@ const readDisk = (uri: string): string | null => {
   }
 };
 
-const resolveUrl = (specifier: string, from: string): string | null => {
+/**
+ * The default resolver. Relative and absolute specifiers resolve as URLs from the importer. A bare
+ * specifier goes through Node package resolution from the importer's directory, so `node_modules`
+ * and package `exports` apply. Returns null when nothing resolves.
+ */
+export const defaultResolve = (specifier: string, from: string): string | null => {
   try {
+    if (isBareSpecifier(specifier)) return from.startsWith("file:") ? pathToFileURL(createRequire(from).resolve(specifier)).href : null;
     const url = new URL(specifier, from);
     return url.href;
   } catch {
     return null;
   }
 };
+
+const existsOnDisk = (uri: string): boolean => uri.startsWith("file:") && existsSync(fileURLToPath(uri));
 
 const languageFor = (languages: readonly AnyLanguage[], uri: string): AnyLanguage | undefined => {
   const path = documentPath(uri);
@@ -99,7 +113,7 @@ export class ModuleGraph {
   constructor(options: ModuleGraphOptions) {
     this.#languages = options.languages;
     this.#read = options.read ?? readDisk;
-    this.#resolve = options.resolve ?? resolveUrl;
+    this.#resolve = options.resolve ?? defaultResolve;
   }
 
   /** Analyzes an entry and every reachable dependency. Returns the entry's routed view. */
@@ -110,7 +124,7 @@ export class ModuleGraph {
     if (source === null) throw new Error(`Cannot read ${id}`);
     for (const stale of this.#staleDependencies(id)) this.#invalidate(stale);
     if (existing && (existing.source !== source || options.parsed !== undefined)) this.#invalidate(id);
-    return this.#visit(id, source, [], options.incremental ?? null, options.parsed).analysis;
+    return this.#visit(id, source, [], options.incremental ?? null, options.parsed, options.language).analysis;
   }
 
   /** Dependency URIs whose backing source no longer matches the cached node. */
@@ -120,7 +134,7 @@ export class ModuleGraph {
     seen.add(uri);
     const stale: string[] = [];
     for (const edge of node.imports) {
-      if (edge.uri === null) continue;
+      if (edge.uri === null || edge.external) continue;
       const source = this.#read(edge.uri);
       if (edge.node === null) {
         // A missing import that now exists, or a cycle edge. Rebuild the
@@ -166,6 +180,7 @@ export class ModuleGraph {
     stack: readonly string[],
     incremental: IncrementalStats | null,
     parsed: ParseResult<unknown> | undefined,
+    entry?: AnyLanguage,
   ): ModuleNode {
     const cached = this.#nodes.get(uri);
     if (cached && cached.source === source && parsed === undefined) {
@@ -177,18 +192,19 @@ export class ModuleGraph {
     // old node and every dependent before rebuilding it.
     if (this.#nodes.has(uri)) this.#invalidate(uri);
 
-    const language = languageFor(this.#languages, uri);
+    const language = entry ?? languageFor(this.#languages, uri);
     if (!language) throw new Error(`No parlance language is registered for ${uri}`);
 
     const tree = parsed ?? language.grammar.parse(source);
     const imports = tree.value === null ? [] : language.imports?.(tree.value) ?? [];
+    const foreignImports = tree.value === null ? [] : language.foreign?.(tree.value) ?? [];
     const diagnostics: Diagnostic[] = [];
     const dependencies: Dependency[] = [];
     const edges: ResolvedImport[] = [];
     const ancestors = [...stack, uri];
     const seen = new Set<string>();
 
-    for (const entry of imports) {
+    for (const entry of [...imports, ...foreignImports.map((foreign) => foreign.specifier)]) {
       const target = this.#resolve(entry.specifier, uri);
       if (target === null) {
         diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
@@ -200,6 +216,18 @@ export class ModuleGraph {
         const cycle = [...ancestors.slice(start), target].map(shortName).join(" -> ");
         diagnostics.push(error(`Import cycle: ${cycle}`, entry.span));
         edges.push({ import: entry, uri: target, node: null });
+        continue;
+      }
+      if (foreignImports.some((foreign) => foreign.specifier === entry) && languageFor(this.#languages, target)) {
+        diagnostics.push(error(`${JSON.stringify(entry.specifier)} is a guest file; use the language's own import`, entry.span));
+        edges.push({ import: entry, uri: target, node: null, external: true });
+        continue;
+      }
+      if (!languageFor(this.#languages, target)) {
+        // A non-guest target. The TypeScript surface and the Node loader resolve it themselves.
+        const found = this.#read(target) !== null || existsOnDisk(target);
+        if (!found) diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
+        edges.push({ import: entry, uri: target, node: null, external: found });
         continue;
       }
       const targetSource = this.#read(target);
@@ -232,13 +260,19 @@ export class ModuleGraph {
       edges.push({ import: entry, uri: target, node });
     }
 
+    const foreign: ForeignSource[] = foreignImports.map((entry) => ({
+      specifier: entry.specifier.specifier,
+      span: entry.specifier.span,
+      uri: edges.find((edge) => edge.import === entry.specifier)?.uri ?? null,
+      names: entry.names,
+    }));
     const analysis = analyzeParsed(
       language,
       source,
       uri,
       tree,
       incremental,
-      { dependencies, diagnostics },
+      { dependencies, diagnostics, foreign },
     );
     let exports: Map<string, Binding> | null = null;
     const node: ModuleNode = {

@@ -281,7 +281,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
 
   const at = (value: Span | { readonly span: Span }): Span => "start" in value ? value : value.span;
 
-  const error = (message: string, value: Span | { readonly span: Span }): void => cx.error(message, at(value));
+  // Pass the node itself: the checker drops a report at a missing token or error node.
+  const error = (message: string, value: Span | { readonly span: Span }): void => cx.error(message, value);
 
   const typed = (value: Span | { readonly span: Span }, type: Type): void => cx.typed(at(value), type);
 
@@ -307,6 +308,9 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
     parameters: ReadonlyMap<string, Type> = new Map(),
   ): Type => {
     switch (syntax.kind) {
+      // The parser reported the missing type; a fresh variable unifies with anything.
+      case "error":
+        return fresh(context.level);
       case "forall": {
         if (new Set(syntax.parameters.map((entry) => entry.text)).size !== syntax.parameters.length) {
           error("Duplicate forall parameter", syntax);
@@ -348,7 +352,7 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
         }
         const info = context.types.get(name);
         if (!info) {
-          error(`Unknown type ${JSON.stringify(name)}`, syntax.name);
+          cx.unknown("type", name, syntax.name, [...context.types.keys(), "number", "boolean", "string"]);
           return fresh(context.level);
         }
         const binding = context.typeBindings.get(name);
@@ -430,6 +434,8 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
   };
 
   const elaborateField = (recordValue: Checked, name: Name): Checked => {
+    // `record.` with the name missing: the parser reported it.
+    if (cx.isMissing(name)) return placeholder(spanFrom(recordValue.span.start, name.span.end));
     const fieldType = fresh(context.level);
     const tail = freshRow([name.text], context.level);
     const expected = record(row(new Map([[name.text, fieldType]]), tail));
@@ -744,6 +750,9 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
 
   const elaborate = (expr: Base | Expr): Checked => {
     switch (expr.kind) {
+      // The parser reported the missing expression.
+      case "error":
+        return placeholder(expr.span);
       case "number": {
         const value = Number(expr.value.text);
         if (!Number.isFinite(value)) error("Number literal is too large", expr);
@@ -770,7 +779,7 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
         const binding = cx.resolve(expr.value.text, expr.value);
         const entry = lookupEntry(expr.value.text);
         if (!binding || !entry) {
-          error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
+          cx.unknown("name", expr.value.text, expr.value);
           return placeholder(expr.span);
         }
         if (entry.constructor) {

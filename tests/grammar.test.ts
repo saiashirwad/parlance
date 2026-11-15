@@ -74,15 +74,18 @@ test("spans are ordered and inside the source", () => {
   walk(result.value);
 });
 
-test("recovery keeps declarations after a malformed one", () => {
+test("recovery repairs a malformed declaration in place", () => {
   const { compiled } = load(calcSource);
   const source = "let a = 1;\nlet = 2;\nlet c = 3;\n";
   const result = compiled.parse(source);
-  assert.equal(result.diagnostics.length > 0, true);
+  assert.deepEqual(result.diagnostics.map((entry) => [entry.code, entry.message]), [["parse/missing", "Expected a name"]]);
   const file = result.value as any;
   assert.equal(file.kind, "file");
-  assert.equal(file.declarations.length, 2);
-  assert.equal(file.declarations[1].name.text, "c");
+  assert.equal(file.declarations.length, 3);
+  // The missing name is a zero-width token right after "let".
+  assert.deepEqual(file.declarations[1].name, { text: "", span: { start: 14, end: 14 }, missing: true });
+  assert.equal(file.declarations[1].value.value.text, "2");
+  assert.equal(file.declarations[2].name.text, "c");
 });
 
 test("grammar checks report left recursion, nullable loops, and unused rules", () => {
@@ -138,4 +141,76 @@ test("source spans of text captures point at the captured characters", () => {
   assert.equal(source.slice(file.declarations[0].name.span.start, file.declarations[0].name.span.end), "abc");
   assert.equal(file.declarations[0].value.value.text, "42");
   assert.equal(source.slice(file.declarations[0].value.value.span.start, file.declarations[0].value.value.span.end), "42");
+});
+
+const bindGrammar = `grammar B
+root File
+rule File = { @file items:Item* };
+rule Item = {
+  | @let "let" name:Name "=" value:Name ";"
+  | @use "use" target:Name ";"
+};
+rule Name = { word };
+`;
+
+test("a bind block parses the same with the bootstrap and the self-hosted parser", () => {
+  const { compiled: grammar } = load(grammarSource);
+  const source = `${bindGrammar}
+bind {
+  import use.target
+  builtin Int, String: type "scalar"
+  scope file, let.value
+  export def let.name: variable "value" after
+  def let.name: parameter in let.value
+  def let.name: property in file
+  ref use.target, let.value: value "name"
+  unique use.target in file "{name} is used twice in {owner}"
+}
+`;
+  const bootstrap = compile(source).parsed;
+  const self = grammar.parse(source);
+  assert.deepEqual(self.diagnostics, []);
+  assert.deepEqual(withoutSpans(self.value), withoutSpans(bootstrap));
+  assert.deepEqual((self.value as typeof bootstrap).bind, bootstrap.bind);
+  assert.equal(bootstrap.bind?.entries.length, 8);
+});
+
+test("a bind block compiles to a spec and checks tags, fields, kinds, and labels", () => {
+  const ok = load(`${bindGrammar}
+bind {
+  export def let.name: variable "value" after
+  ref use.target: value "name"
+  builtin Int: type
+}
+`).compiled;
+  assert.deepEqual(ok.bind?.defs, [{
+    node: "let",
+    field: "name",
+    kind: "variable",
+    label: "value",
+    detail: "value",
+    owner: null,
+    within: null,
+    after: true,
+    exported: true,
+  }]);
+  assert.deepEqual(ok.bind?.refs, [{ node: "use", field: "target", label: "value", noun: "name" }]);
+  assert.equal(load(bindGrammar).compiled.bind, null);
+
+  const bad = compile(`${bindGrammar}
+bind {
+  def nope.name: variable
+  def let.nope: variable
+  def let.name: thing
+  ref use.target: missing
+  scope let
+}
+`).compiled;
+  assert.equal(bad.valid, false);
+  assert.deepEqual(bad.diagnostics.filter((entry) => entry.code === "grammar/bind").map((entry) => entry.message), [
+    "Unknown tag @nope in bind",
+    "@let has no field nope",
+    'Unknown definition kind "thing"',
+    'No def or builtin is labelled "missing"',
+  ]);
 });

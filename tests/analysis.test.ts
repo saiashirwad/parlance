@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Checker, isError, isMissing } from "../src/check/index.ts";
 import { analyze, analyzeParsed } from "../src/language.ts";
 import { reparse } from "../src/parser/incremental.ts";
 import { diff } from "../src/source.ts";
@@ -46,4 +47,27 @@ test("diff finds a single minimal edit", () => {
   assert.deepEqual(diff("abc", "abcd"), { start: 3, end: 3, insert: "d" });
   assert.deepEqual(diff("abcd", "abc"), { start: 3, end: 4, insert: "" });
   assert.deepEqual(diff("", "hello"), { start: 0, end: 0, insert: "hello" });
+});
+
+test("the checker ignores missing names and drops reports at repaired syntax", () => {
+  const cx = new Checker<string>("memory://x", "let = 1;");
+  const name = { text: "", span: { start: 4, end: 4 }, missing: true as const };
+  const node = { kind: "error" as const, span: { start: 6, end: 6 } };
+  assert.equal(isError(node), true);
+  assert.equal(isError({ kind: "name", span: node.span }), false);
+  assert.equal(isMissing(name), true);
+  assert.equal(isMissing(node), true);
+  const present = { text: "x", span: name.span };
+  assert.equal(isMissing(present), false);
+  const binding = cx.bind(cx.declare(name.text, name, "variable", "number"));
+  cx.define(binding, name, "number");
+  assert.equal(cx.resolve("", name), undefined);
+  cx.reference(binding, name);
+  cx.error("Unknown name", name);
+  cx.warn("Unused", node);
+  assert.deepEqual(cx.facts.definitions, []);
+  assert.deepEqual(cx.facts.references, []);
+  assert.deepEqual(cx.facts.diagnostics, []);
+  cx.error("real", { start: 0, end: 3 });
+  assert.equal(cx.facts.diagnostics.length, 1);
 });

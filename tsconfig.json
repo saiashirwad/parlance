@@ -14,7 +14,7 @@
   "contentMappers": [
     {
       "package": "@parlance/ts-host",
-      "extensions": [".advanced", ".calc", ".machine", ".schema"],
+      "extensions": [".advanced", ".calc", ".machine", ".schema", ".embeds"],
       "options": { "config": "./parlance.config.ts" }
     }
   ],

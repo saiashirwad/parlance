@@ -1,12 +1,12 @@
 import { readFileSync } from "node:fs";
-import { type Binding, type Checker } from "../../src/check/index.ts";
+import { bind, type Binding, type Checker } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage, importSpecifier } from "../../src/language.ts";
+import { defineLanguage } from "../../src/language.ts";
 import { runtimeModule } from "../../src/runtime/index.ts";
 import type { Span, Text } from "../../src/source.ts";
 import { source, synth, ts } from "../../src/ts/index.ts";
-import type { File } from "./machine.ast.ts";
+import type { EventEventNode, Field, File, StateDecl } from "./machine.ast.ts";
 
 const sourceText = readFileSync(new URL("./machine.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "machine.parl");
@@ -14,10 +14,8 @@ if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message)
 const grammar = compileGrammar<File>(parsed.file, "machine.parl");
 if (!grammar.valid) throw new Error(grammar.diagnostics.map((entry) => entry.message).join("\n"));
 
-const scalarList = ["Int", "String", "Bool", "DateTime"] as const;
-const scalars = new Set<string>(scalarList);
-
-type Scalar = (typeof scalarList)[number];
+/** The `builtin` names in machine.parl. */
+type Scalar = "Int" | "String" | "Bool" | "DateTime";
 
 type Checked =
   | { readonly kind: "machine"; readonly name: string }
@@ -53,6 +51,7 @@ export type MachineModule = {
   readonly events: readonly EventIR[];
   readonly states: readonly StateIR[];
   readonly initial: StateIR;
+  readonly exports: readonly Binding<Checked>[];
 };
 
 const display = (value: Checked): string => {
@@ -66,71 +65,49 @@ const display = (value: Checked): string => {
   }
 };
 
-const check = (file: File, cx: Checker<Checked>): MachineModule => {
-  const machineType: Checked = { kind: "machine", name: file.name.text };
-  const machine = cx.declare(file.name.text, file.name.span, "namespace", machineType);
-  cx.bind(machine);
-  cx.typed(file.name, machineType);
+const typeOf = (node: File | EventEventNode | StateDecl): Checked => {
+  switch (node.kind) {
+    case "machine":
+    case "event":
+      return { kind: node.kind, name: node.name.text };
+    default:
+      return { kind: "state", name: node.name.text, final: node.kind === "final" };
+  }
+};
 
-  const names = new Set<string>();
-  const events: EventIR[] = [];
-  const eventMap = new Map<string, EventIR>();
+const check = (file: File, cx: Checker<Checked>): MachineModule => {
+  const bound = bind<Checked>(file, cx, grammar.bind!, {
+    type: (node: File | EventEventNode | Field | StateDecl) => node.kind === "field" ? undefined : typeOf(node),
+    builtin: (name) => ({ kind: "scalar", name: name as Scalar }),
+  });
+
+  const events = new Map<EventEventNode, EventIR>();
   for (const event of file.events) {
     if (event.kind === "import") continue;
-    if (names.has(event.name.text)) {
-      cx.error(`Duplicate name ${JSON.stringify(event.name.text)}`, event.name);
-      continue;
-    }
-    names.add(event.name.text);
-    const type: Checked = { kind: "event", name: event.name.text };
-    const binding = cx.declare(event.name.text, event.name.span, "event", type, { detail: "event" });
-    cx.bind(binding);
-    cx.typed(event.name, type);
+    const binding = bound.binding(event);
+    if (!binding) continue;
     const fields: PayloadFieldIR[] = [];
-    const fieldNames = new Set<string>();
-    for (const field of event.payload?.fields ?? []) {
-      if (fieldNames.has(field.name.text)) {
-        cx.error(`Duplicate payload field ${JSON.stringify(field.name.text)}`, field.name);
-        continue;
-      }
-      fieldNames.add(field.name.text);
+    for (const field of bound.members<Field>(event)) {
       if (field.name.text === "type") {
         cx.error(`Payload field "type" is reserved for the event tag`, field.name);
         continue;
       }
-      const scalar = scalars.has(field.type.text) ? field.type.text as Scalar : null;
-      if (scalar === null) {
-        cx.error(`Unknown payload type ${JSON.stringify(field.type.text)}`, field.type);
-      }
-      const fieldType: Checked | undefined = scalar === null ? undefined : { kind: "scalar", name: scalar };
-      const fieldBinding = cx.declare(field.name.text, field.name.span, "property", fieldType, {
-        detail: event.name.text,
-      });
-      if (fieldType) cx.typed(field.name, fieldType);
-      if (fieldType) cx.typed(field.type, fieldType);
+      const scalar = (bound.builtin(field.type) ?? null) as Scalar | null;
+      const fieldBinding = scalar === null
+        ? bound.binding(field)!
+        : bound.define(field, { kind: "scalar", name: scalar })!;
       fields.push({ name: field.name, type: scalar, binding: fieldBinding });
     }
-    const value: EventIR = { name: event.name, fields, binding };
-    events.push(value);
-    eventMap.set(event.name.text, value);
+    events.set(event, { name: event.name, fields, binding });
   }
 
-  const states: StateIR[] = [];
-  const stateMap = new Map<string, StateIR>();
+  const states = new Map<StateDecl, StateIR>();
   let initial: StateIR | null = null;
   for (const declaration of file.states) {
-    if (names.has(declaration.name.text)) {
-      cx.error(`Duplicate name ${JSON.stringify(declaration.name.text)}`, declaration.name);
-      continue;
-    }
-    names.add(declaration.name.text);
-    const type: Checked = { kind: "state", name: declaration.name.text, final: declaration.kind === "final" };
-    const binding = cx.declare(declaration.name.text, declaration.name.span, "class", type, { detail: "state" });
-    cx.bind(binding);
-    cx.typed(declaration.name, type);
+    const binding = bound.binding(declaration);
+    if (!binding) continue;
     const value: StateIR = { name: declaration.name, final: declaration.kind === "final", transitions: [], binding };
-    states.push(value);
-    stateMap.set(declaration.name.text, value);
+    states.set(declaration, value);
     if (declaration.kind === "initial") {
       if (initial) cx.error("A machine has only one initial state", declaration.name);
       else initial = value;
@@ -138,32 +115,13 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
   }
   if (!initial) cx.error("A machine needs an initial state", file.name);
 
-  const usedEvents = new Set<string>();
-  for (const declaration of file.states) {
-    const state = stateMap.get(declaration.name.text);
-    if (!state) continue;
-    const seen = new Set<string>();
-    const transitions: TransitionIR[] = [];
-    const transitionsOf = declaration.kind === "final" ? [] : declaration.transitions;
-    for (const transition of transitionsOf) {
-      if (seen.has(transition.event.text)) {
-        cx.error(
-          `State ${state.name.text} already handles ${JSON.stringify(transition.event.text)}`,
-          transition.event,
-        );
-        continue;
-      }
-      seen.add(transition.event.text);
-      const event = eventMap.get(transition.event.text);
-      if (!event) {
-        cx.error(`Unknown event ${JSON.stringify(transition.event.text)}`, transition.event);
-        continue;
-      }
-      const target = stateMap.get(transition.target.text);
-      if (!target) {
-        cx.error(`Unknown state ${JSON.stringify(transition.target.text)}`, transition.target);
-        continue;
-      }
+  const usedEvents = new Set<EventIR>();
+  for (const [declaration, state] of states) {
+    for (const transition of declaration.kind === "final" ? [] : declaration.transitions) {
+      if (bound.duplicate(transition.event)) continue;
+      const event = events.get(bound.target<EventEventNode>(transition.event)!);
+      const target = states.get(bound.target<StateDecl>(transition.target)!);
+      if (!event || !target) continue;
       const binding = transition.binding?.fields ?? [];
       if (event.fields.length > 0 && !transition.binding) {
         cx.error(`Event ${event.name.text} needs a payload binding`, transition.event);
@@ -183,7 +141,11 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
       let mismatched = false;
       for (const [index, name] of binding.entries()) {
         const field = event.fields[index]!;
-        if (name.text === field.name.text) continue;
+        if (name.text === field.name.text) {
+          cx.reference(field.binding, name);
+          if (field.type) cx.typed(name, { kind: "scalar", name: field.type });
+          continue;
+        }
         cx.error(
           `Event ${event.name.text} payload field ${index + 1} is ${JSON.stringify(field.name.text)}, found ${
             JSON.stringify(name.text)
@@ -193,31 +155,15 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
         mismatched = true;
       }
       if (mismatched) continue;
-      const payload = cx.scope(() =>
-        binding.map((name, index) => {
-          const field = event.fields[index]!;
-          cx.bind(field.binding);
-          cx.reference(field.binding, name);
-          if (field.type) cx.typed(name, { kind: "scalar", name: field.type });
-          return field;
-        })
-      );
-      usedEvents.add(event.name.text);
-      cx.reference(event.binding, transition.event);
-      cx.reference(target.binding, transition.target);
-      cx.typed(transition.event, event.binding.type!);
-      cx.typed(transition.target, target.binding.type!);
-      transitions.push({ event, target, payload, span: transition.span });
+      usedEvents.add(event);
+      state.transitions.push({ event, target, payload: event.fields, span: transition.span });
     }
-    state.transitions.push(...transitions);
-    if (!state.final && transitions.length === 0) {
+    if (!state.final && state.transitions.length === 0) {
       cx.error(`State ${state.name.text} is not final and has no transitions`, state.name);
     }
   }
-  for (const event of events) {
-    if (!usedEvents.has(event.name.text)) {
-      cx.warn(`Event ${event.name.text} is never used`, event.name);
-    }
+  for (const event of events.values()) {
+    if (!usedEvents.has(event)) cx.warn(`Event ${event.name.text} is never used`, event.name);
   }
 
   if (initial) {
@@ -231,12 +177,13 @@ const check = (file: File, cx: Checker<Checked>): MachineModule => {
         queue.push(transition.target);
       }
     }
-    for (const state of states) {
+    for (const state of states.values()) {
       if (!reachable.has(state)) cx.error(`State ${state.name.text} is unreachable`, state.name);
     }
   }
 
-  return { name: file.name, events, states, initial: initial ?? states[0]! };
+  const all = [...states.values()];
+  return { name: file.name, events: [...events.values()], states: all, initial: initial ?? all[0]!, exports: bound.exports };
 };
 
 const scalarTs = (type: Scalar | null): string =>
@@ -291,12 +238,9 @@ export const machine = defineLanguage<File, MachineModule, Checked>({
   extensions: [".machine"],
   grammar,
   check,
-  imports: (file) =>
-    file.events.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
-  exports: (module) => [...module.events.map((event) => event.binding), ...module.states.map((state) => state.binding)],
+  exports: (module) => module.exports,
   typescript: types,
   runtime,
   show: display,
-  completions: scalarList.map((label) => ({ label, kind: "type" as const, detail: "scalar" })),
   describe: (binding) => binding.type ? display(binding.type) : undefined,
 });

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { discoverConfig, loadLanguages } from "./config.ts";
+import { discoverConfig, loadProject, type ProjectConfig } from "./config.ts";
 import { type Diagnostic, render } from "./diagnostic.ts";
 import { compileGrammar } from "./grammar/compile.ts";
 import { parseGrammar } from "./grammar/parse.ts";
@@ -40,10 +40,10 @@ const withoutFlags = (args: readonly string[], flags: readonly string[]): string
   return result;
 };
 
-const languagesFor = async (args: readonly string[]): Promise<readonly AnyLanguage[]> => {
+const projectFor = async (args: readonly string[]): Promise<ProjectConfig> => {
   const config = valueOf(args, "--config") ?? discoverConfig(process.cwd());
   if (!config) fail("No parlance config found. Pass --config ./parlance.config.ts");
-  return loadLanguages(config!);
+  return loadProject(config!);
 };
 
 const print = (file: string, source: string, diagnostics: readonly Diagnostic[]): number => {
@@ -56,9 +56,9 @@ const print = (file: string, source: string, diagnostics: readonly Diagnostic[])
 const check = async (args: readonly string[]): Promise<number> => {
   const files = withoutFlags(args, ["--config"]);
   if (files.length === 0) fail(usage);
-  const languages = await languagesFor(args);
+  const { languages, resolve: resolver } = await projectFor(args);
   const registry = extensionMap(languages);
-  const graph = new ModuleGraph({ languages });
+  const graph = new ModuleGraph({ languages, ...(resolver ? { resolve: resolver } : {}) });
   let errors = 0;
   for (const file of files) {
     const path = resolve(file);
@@ -81,13 +81,13 @@ const emit = async (args: readonly string[]): Promise<number> => {
   const out = valueOf(args, "--out");
   const files = withoutFlags(args, ["--target", "--out", "--config"]);
   if (!target || files.length !== 1) fail(usage);
-  const languages = await languagesFor(args);
+  const { languages, resolve: resolver } = await projectFor(args);
   const registry = extensionMap(languages);
   const path = resolve(files[0]!);
   const language = [...registry].find(([extension]) => path.endsWith(extension))?.[1];
   if (!language) fail(`${files[0]}: no registered language for this extension`);
   const source = readFileSync(path, "utf8");
-  const analysis = new ModuleGraph({ languages }).analyze(path, { source });
+  const analysis = new ModuleGraph({ languages, ...(resolver ? { resolve: resolver } : {}) }).analyze(path, { source });
   if (print(files[0]!, source, analysis.diagnostics) > 0 || analysis.ir === null) return 1;
   const emitTarget = language!.targets?.[target!];
   if (!emitTarget) {
@@ -105,10 +105,10 @@ const emit = async (args: readonly string[]): Promise<number> => {
 };
 
 const lsp = async (args: readonly string[]): Promise<number> => {
-  const languages = await languagesFor(args);
+  const { languages, resolve: resolver } = await projectFor(args);
   if (languages.length === 0) fail("The config exports no languages");
   const { serve } = await import("./lsp/server.ts");
-  serve(languages);
+  serve(languages, resolver ? { resolve: resolver } : {});
   return 0;
 };
 

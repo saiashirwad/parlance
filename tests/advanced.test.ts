@@ -249,3 +249,12 @@ test("advanced runs the upstream program through the Node loader", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "The answer is:\n49\n49 10 20 2 20 true 7\n");
 });
+
+test("shared-prefix alternatives parse in linear time", () => {
+  const source = "let a = 1 in ".repeat(25) + "a\n";
+  const start = performance.now();
+  const result = advanced.grammar.parse(source);
+  const elapsed = performance.now() - start;
+  assert.equal(result.diagnostics.length, 0);
+  assert.ok(elapsed < 50, `25 nested lets took ${elapsed.toFixed(1)}ms`);
+});

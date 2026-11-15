@@ -149,6 +149,22 @@ local ok, failure = pcall(function()
     position = position(rootLine, rootCharacter),
   })
   assert(grammarHover.contents.value:find("rule File") ~= nil, "grammar hover did not resolve the rule")
+
+  open("examples/embed/app.ts")
+  assert(vim.bo.filetype == "typescript", "expected filetype typescript")
+  local embedClients = vim.lsp.get_clients({ bufnr = 0, name = "parlance" })
+  assert(#embedClients == 1, "parlance did not attach to the TypeScript buffer")
+  local embedSource = vim.api.nvim_buf_get_lines(0, 0, -1, false)
+  local whereLine = nil
+  for index, text in ipairs(embedSource) do
+    if text:match("User |> where") then whereLine = index - 1 end
+  end
+  assert(whereLine, "missing snippet query line")
+  local embedHover = request("textDocument/hover", {
+    textDocument = { uri = vim.uri_from_bufnr(0) },
+    position = position(whereLine, embedSource[whereLine + 1]:find("User") - 1),
+  })
+  assert(embedHover and embedHover.contents.value:find("User") ~= nil, "snippet hover did not show User")
 end)
 
 if not ok then
@@ -156,5 +172,5 @@ if not ok then
   vim.cmd("cquit 1")
 end
 
-print("ok nvim: advanced, calc, schema, machine, parl, hover, definition, tokens, diagnostics")
+print("ok nvim: advanced, calc, schema, machine, parl, embedded snippets, hover, definition, tokens, diagnostics")
 vim.cmd("qa!")
