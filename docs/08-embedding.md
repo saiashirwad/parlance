@@ -18,7 +18,7 @@ query userByEmail(email: String): User? =
 const user = Blog.open(":memory:").userByEmail({ email: "a@b.c" }); // User | undefined
 ```
 
-`examples/embed/app.ts` is the full example. A language opts in with a tag:
+`examples/embed/app.ts` is the full example; `examples/embed/kernel.ts` runs a `gpu("Saxpy")` shade kernel on the CPU. A language opts in with a tag:
 
 ```ts
 defineLanguage({ name: "schema", extensions: [".schema"], embed: { tag: "schema" }, ... });
