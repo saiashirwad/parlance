@@ -4,6 +4,10 @@ import {
   type Alternative,
   type Alternatives,
   assoc,
+  type Bind,
+  type BindEntry,
+  type BindPath,
+  type BindVisibility,
   type Body,
   builtins,
   type GrammarFile,
@@ -116,7 +120,7 @@ const lex = (source: string): readonly Lexeme[] => {
       push("word", start, source.slice(start, offset));
       continue;
     }
-    if ("@$~&!|*+?:(){}[],=;".includes(source[offset]!)) {
+    if ("@$~&!|*+?:(){}[],=;.".includes(source[offset]!)) {
       push("symbol", offset, source[offset]!);
       offset++;
       continue;
@@ -194,6 +198,7 @@ class Bootstrap {
     let word: Word | null = null;
     let root: Root | null = null;
     const rules: Rule[] = [];
+    let bind: Bind | null = null;
     while (this.current.kind !== "eof") {
       if (this.atWord("skip")) {
         const begin = this.advance().span.start;
@@ -245,6 +250,9 @@ class Bootstrap {
           body,
           span: { start: begin, end: this.#tokens[this.#position - 1]!.span.end },
         });
+      } else if (this.atWord("bind")) {
+        if (bind) this.fail("`bind` is declared more than once", this.current.span);
+        bind = this.bind();
       } else {
         this.fail(`Expected a declaration, found ${JSON.stringify(this.current.text)}`);
       }
@@ -258,8 +266,99 @@ class Bootstrap {
       tokens,
       root,
       rules,
+      bind,
       span: { start, end },
     };
+  }
+
+  bind(): Bind {
+    const start = this.advance().span.start;
+    this.takeSymbol("{");
+    const entries: BindEntry[] = [];
+    while (!this.atSymbol("}")) entries.push(this.bindEntry());
+    this.advance();
+    return { kind: "bind", entries, span: { start, end: this.#tokens[this.#position - 1]!.span.end } };
+  }
+
+  bindEntry(): BindEntry {
+    const start = this.current.span.start;
+    const end = (): Span => ({ start, end: this.#tokens[this.#position - 1]!.span.end });
+    const string = (): Text | null => {
+      if (this.current.kind !== "string") return null;
+      const token = this.advance();
+      return { text: token.text, span: token.span };
+    };
+    if (this.atWord("import") || this.atWord("scope")) {
+      const kind = this.advance().text as "import" | "scope";
+      const paths = this.bindPaths();
+      return { kind, paths, span: end() };
+    }
+    if (this.atWord("builtin")) {
+      this.advance();
+      const names = [this.text()];
+      while (this.atSymbol(",")) {
+        this.advance();
+        names.push(this.text());
+      }
+      this.takeSymbol(":");
+      const type = this.text();
+      const label = string();
+      return { kind: "builtin", names, type, label, span: end() };
+    }
+    if (this.atWord("export") || this.atWord("def")) {
+      let exported: Text | null = null;
+      if (this.atWord("export")) exported = this.text();
+      this.takeWord("def");
+      const paths = this.bindPaths();
+      this.takeSymbol(":");
+      const type = this.text();
+      const label = string();
+      let visibility: BindVisibility | null = null;
+      if (this.atWord("after")) {
+        visibility = { kind: "after", span: this.advance().span };
+      } else if (this.atWord("in")) {
+        const begin = this.advance().span.start;
+        const target = this.bindPath();
+        visibility = { kind: "in", target, span: { start: begin, end: target.span.end } };
+      }
+      return { kind: "def", exported, paths, type, label, visibility, span: end() };
+    }
+    if (this.atWord("ref")) {
+      this.advance();
+      const paths = this.bindPaths();
+      this.takeSymbol(":");
+      const label = this.text();
+      const noun = string();
+      return { kind: "ref", paths, label, noun, span: end() };
+    }
+    if (this.atWord("unique")) {
+      this.advance();
+      const paths = this.bindPaths();
+      this.takeWord("in");
+      const owner = this.text();
+      const message = string();
+      return { kind: "unique", paths, owner, message, span: end() };
+    }
+    return this.fail(`Expected a bind entry, found ${JSON.stringify(this.current.text)}`);
+  }
+
+  bindPaths(): BindPath[] {
+    const paths = [this.bindPath()];
+    while (this.atSymbol(",")) {
+      this.advance();
+      paths.push(this.bindPath());
+    }
+    return paths;
+  }
+
+  bindPath(): BindPath {
+    const node = this.text();
+    let field: Text | null = null;
+    if (this.atSymbol(".")) {
+      this.advance();
+      field = this.text();
+    }
+    return { kind: "path", node, field, span: { start: node.span.start, end: (field ?? node).span.end } };
   }
 
   body(): Body {

@@ -17,9 +17,13 @@ import {
   type TokenSpec,
 } from "../parser/spec.ts";
 import type { TokenList } from "../parser/tokens.ts";
+import type { BindSpec } from "../check/bind.ts";
+import type { DefinitionKind } from "../check/facts.ts";
 import { parseGrammar as parseGrammarSource } from "./parse.ts";
 import {
   type Alternative,
+  type Bind,
+  type BindPath,
   type Body,
   type GrammarFile,
   type Item,
@@ -34,6 +38,8 @@ export type CompiledGrammar<A = unknown> = {
   readonly spec: GrammarSpec;
   readonly valid: boolean;
   readonly diagnostics: readonly Diagnostic[];
+  /** The compiled `bind { ... }` block, for `bind` in a checker; null when the grammar has none. */
+  readonly bind: BindSpec | null;
   parse(source: string, options?: ParseOptions): ParseResult<A>;
   lex(source: string): TokenList;
   highlight(source: string): Token[];
@@ -1053,6 +1059,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     }
   };
   for (const rule of file.rules) inspectBody(rule.body);
+  const bindSpec = file.bind === null ? null : compileBind(file.bind, file, diagnostics);
 
   const ruleSpecs = file.rules.flatMap((rule, index) => {
     const expr = annotated[context.rules.get(text(rule.name)) ?? index];
@@ -1146,6 +1153,7 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     spec,
     valid,
     diagnostics: sorted,
+    bind: bindSpec,
     parse: (source: string, options?: ParseOptions) => {
       if (!valid) {
         const list = lexTokens(spec, source);
@@ -1163,6 +1171,174 @@ export const compileGrammar = <A = unknown>(file: GrammarFile, uri = "grammar.pa
     highlight: (source: string) => highlightOfSource(spec, source),
     highlightTokens: (tokens: TokenList) => highlightOfTokens(spec, tokens),
   };
+};
+
+const definitionKinds: ReadonlySet<string> = new Set<DefinitionKind>([
+  "namespace",
+  "type",
+  "class",
+  "enum",
+  "interface",
+  "struct",
+  "typeParameter",
+  "parameter",
+  "variable",
+  "property",
+  "enumMember",
+  "event",
+  "function",
+  "method",
+  "macro",
+  "constant",
+]);
+
+/** Field labels by node tag, across every alternative; precedence bodies add their operator nodes. */
+const tagFields = (file: GrammarFile): Map<string, Set<string>> => {
+  const tags = new Map<string, Set<string>>();
+  const add = (tag: string, labels: readonly string[]) => {
+    let set = tags.get(tag);
+    if (!set) tags.set(tag, set = new Set());
+    for (const label of labels) set.add(label);
+  };
+  const visit = (alternatives: readonly Alternative[]): void => {
+    for (const alternative of alternatives) {
+      if (alternative.tag !== null) {
+        add(
+          text(alternative.tag),
+          alternative.items.flatMap((item) => item.label === null || item.label.text === "_" ? [] : [item.label.text]),
+        );
+      }
+      for (const item of alternative.items) inspectUnaryTags(item.expr, visit);
+    }
+  };
+  for (const rule of file.rules) {
+    if (rule.body.kind === "alternatives") visit(rule.body.alts);
+    else if (rule.body.kind === "precedence") {
+      add("binary", ["operator", "left", "right"]);
+      add("prefix", ["operator", "operand"]);
+      add("postfix", ["operator", "operand"]);
+      for (const level of rule.body.levels) for (const operator of level.operators) inspectUnaryTags(operator, visit);
+      visit(rule.body.atom);
+    }
+  }
+  return tags;
+};
+
+/** Checks a `bind` block against the grammar's tags and fields and lowers it to a `BindSpec`. */
+const compileBind = (block: Bind, file: GrammarFile, diagnostics: Diagnostic[]): BindSpec => {
+  const tags = tagFields(file);
+  const report = (message: string, span: Span) => diagnostics.push(error(message, span, { code: "grammar/bind" }));
+  const string = (value: Text | null): string | null => value === null ? null : decodeString(value.text, value.span).text;
+  const tag = (name: Text): boolean => {
+    if (tags.has(name.text)) return true;
+    report(`Unknown tag @${name.text} in bind`, name.span);
+    return false;
+  };
+  /** A `tag.field` path; `bare` allows a lone tag. Returns null after reporting. */
+  const path = (value: BindPath, bare = false): { node: string; field: string } | null => {
+    if (!tag(value.node)) return null;
+    if (value.field === null) {
+      if (bare) return { node: value.node.text, field: "" };
+      report(`Expected a field: ${value.node.text}.<field>`, value.span);
+      return null;
+    }
+    if (!tags.get(value.node.text)!.has(value.field.text)) {
+      report(`@${value.node.text} has no field ${value.field.text}`, value.field.span);
+      return null;
+    }
+    return { node: value.node.text, field: value.field.text };
+  };
+  const kind = (value: Text): DefinitionKind | null => {
+    if (definitionKinds.has(value.text)) return value.text as DefinitionKind;
+    report(`Unknown definition kind ${JSON.stringify(value.text)}`, value.span);
+    return null;
+  };
+  const spec = {
+    defs: [] as BindSpec["defs"][number][],
+    refs: [] as BindSpec["refs"][number][],
+    uniques: [] as BindSpec["uniques"][number][],
+    builtins: [] as BindSpec["builtins"][number][],
+    scopes: new Set<string>(),
+    imports: [] as { node: string; field: string }[],
+  };
+  const labels = new Set<string>();
+  const refLabels: Text[] = [];
+  for (const entry of block.entries) {
+    switch (entry.kind) {
+      case "import":
+        for (const value of entry.paths) {
+          const resolved = path(value);
+          if (resolved) spec.imports.push(resolved);
+        }
+        break;
+      case "scope":
+        for (const value of entry.paths) {
+          const resolved = path(value, true);
+          if (resolved) spec.scopes.add(resolved.field === "" ? resolved.node : `${resolved.node}.${resolved.field}`);
+        }
+        break;
+      case "builtin": {
+        const type = kind(entry.type);
+        if (type === null) break;
+        const detail = string(entry.label);
+        const label = detail ?? type;
+        labels.add(label);
+        for (const name of entry.names) spec.builtins.push({ name: name.text, kind: type, label, detail });
+        break;
+      }
+      case "def": {
+        const type = kind(entry.type);
+        const detail = string(entry.label);
+        const visibility = entry.visibility;
+        let owner: string | null = null;
+        let within: { node: string; field: string } | null = null;
+        if (visibility?.kind === "in") {
+          if (visibility.target.field === null) owner = tag(visibility.target.node) ? visibility.target.node.text : null;
+          else within = path(visibility.target);
+          if (owner === null && within === null) break;
+        }
+        if (type === null) break;
+        const label = detail ?? type;
+        labels.add(label);
+        for (const value of entry.paths) {
+          const resolved = path(value);
+          if (!resolved) continue;
+          spec.defs.push({
+            ...resolved,
+            kind: type,
+            label,
+            detail,
+            owner,
+            within,
+            after: visibility?.kind === "after",
+            exported: entry.exported !== null,
+          });
+        }
+        break;
+      }
+      case "ref": {
+        refLabels.push(entry.label);
+        const noun = string(entry.noun) ?? entry.label.text;
+        for (const value of entry.paths) {
+          const resolved = path(value);
+          if (resolved) spec.refs.push({ ...resolved, label: entry.label.text, noun });
+        }
+        break;
+      }
+      case "unique": {
+        if (!tag(entry.owner)) break;
+        for (const value of entry.paths) {
+          const resolved = path(value);
+          if (resolved) spec.uniques.push({ ...resolved, owner: entry.owner.text, message: string(entry.message) });
+        }
+        break;
+      }
+    }
+  }
+  for (const label of refLabels) {
+    if (!labels.has(label.text)) report(`No def or builtin is labelled ${JSON.stringify(label.text)}`, label.span);
+  }
+  return spec;
 };
 
 const inspectUnaryTags = (unary: Unary, visit: (alts: readonly Alternative[]) => void): void => {

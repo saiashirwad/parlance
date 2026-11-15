@@ -18,6 +18,7 @@ rule File = {
     tokens:TokenDecl*
     root:Root?
     rules:Rule*
+    bind:Bind?
 };
 
 rule Skip = { @skip "skip" ~ pattern:$Regex };
@@ -80,6 +81,22 @@ rule Assoc = {
   | value:"none"
   | value:"prefix"
   | value:"postfix"
+};
+
+rule Bind = { @bind "bind" ~ "{" entries:BindEntry* "}" };
+rule BindEntry = {
+  | @import "import" ~ paths:sep1(BindPath, ",")
+  | @scope "scope" ~ paths:sep1(BindPath, ",")
+  | @builtin "builtin" ~ names:sep1(Name, ",") ":" type:Name label:$String?
+  | @def exported:"export"? "def" ~ paths:sep1(BindPath, ",") ":" type:Name label:$String? visibility:Visibility?
+  | @ref "ref" ~ paths:sep1(BindPath, ",") ":" label:Name noun:$String?
+  | @unique "unique" ~ paths:sep1(BindPath, ",") "in" owner:Name message:$String?
+};
+rule BindPath = { @path node:Name field:BindField? };
+rule BindField = { "." name:Name };
+rule Visibility = {
+  | @after "after"
+  | @in "in" ~ target:BindPath
 };
 
 rule Name = { word };
