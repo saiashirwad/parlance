@@ -51,7 +51,8 @@ test("a broken let keeps every later definition of main.advanced", () => {
     const analysis = analyzeMain(source);
     const parse = analysis.diagnostics.filter((entry) => entry.code?.startsWith("parse/"));
     assert.deepEqual(codes(parse), ["parse/missing"], name);
-    assert.equal(localDefinitions(source), clean, name);
+    // A missing name is not a definition; every other one survives.
+    assert.equal(localDefinitions(source), name === "missing name" ? clean - 1 : clean, name);
   }
 });
 

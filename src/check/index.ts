@@ -19,6 +19,8 @@ export {
 export {
   at,
   type CheckOptions,
+  isError,
+  isMissing,
   Checker,
   type Dependency,
   type Dependencies,

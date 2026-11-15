@@ -4,7 +4,7 @@ import {
   diagnostic,
   type Related,
 } from "../diagnostic.ts";
-import type { Span } from "../source.ts";
+import type { ErrorNode, Span } from "../source.ts";
 import {
   type Binding,
   type DefinitionKind,
@@ -18,6 +18,13 @@ import {
 export type Spanned = { readonly span: Span };
 
 export const at = (value: Span | Spanned): Span => "start" in value ? value : value.span;
+
+/** A zero-width error node a repair parse left where a node is missing. */
+export const isError = (value: object): value is ErrorNode => (value as { readonly kind?: unknown }).kind === "error";
+
+/** An error node or a missing token (`{ text: "", missing: true }`): syntax the parser already reported. */
+export const isMissing = (value: Span | Spanned): boolean =>
+  isError(value) || (value as { readonly missing?: unknown }).missing === true;
 
 /** One analyzed dependency, as seen by a checker. */
 export type Dependency<Type = unknown> = {
@@ -84,15 +91,32 @@ export class Checker<T = unknown> {
     return diagnostic(message, at(value), options);
   }
 
+  /** A guard for error nodes; see `isError`. */
+  isError(value: object): value is ErrorNode {
+    return isError(value);
+  }
+
+  /** True for an error node or a missing token; see `isMissing`. */
+  isMissing(value: Span | Spanned): boolean {
+    return isMissing(value);
+  }
+
+  /**
+   * Reports at `value`. A report at an error node or a missing token is dropped:
+   * the parser already reported it, and a second message would only cascade.
+   */
   error(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "error" }));
   }
 
   warn(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "warning" }));
   }
 
   info(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
+    if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "info" }));
   }
 
@@ -106,8 +130,9 @@ export class Checker<T = unknown> {
     }
   }
 
-  /** Adds a binding to the current scope. */
+  /** Adds a binding to the current scope. A missing (empty) name is never bound. */
   bind(binding: Binding<T>): Binding<T> {
+    if (binding.name === "") return binding;
     this.#scopes[this.#scopes.length - 1]!.set(binding.name, binding);
     return binding;
   }
@@ -117,7 +142,10 @@ export class Checker<T = unknown> {
     for (const binding of bindings) this.bind(binding);
   }
 
-  /** Records a definition. The definition is not in scope until `bind`. */
+  /**
+   * Records a definition. The definition is not in scope until `bind`.
+   * A missing (empty) name, from a repaired parse, gets a binding that is not recorded.
+   */
   declare(
     name: string,
     value: Span | Spanned,
@@ -134,12 +162,13 @@ export class Checker<T = unknown> {
       ...(extra.uri === undefined ? {} : { uri: extra.uri }),
       ...(extra.detail === undefined ? {} : { detail: extra.detail }),
     };
-    this.facts.definitions.push(binding);
+    if (name !== "") this.facts.definitions.push(binding);
     return binding;
   }
 
-  /** Looks up a name and records a reference when found. */
+  /** Looks up a name and records a reference when found. A missing (empty) name finds nothing. */
   resolve(name: string, value: Span | Spanned | undefined): Binding<T> | undefined {
+    if (name === "") return undefined;
     let found: Binding<T> | undefined;
     for (let index = this.#scopes.length - 1; index >= 0; index--) {
       found = this.#scopes[index]!.get(name);
@@ -180,6 +209,7 @@ export class Checker<T = unknown> {
   }
 
   reference(binding: { readonly id: number; readonly uri?: string }, value: Span | Spanned): void {
+    if (isMissing(value)) return;
     const span = at(value);
     const key = `${binding.id}:${span.start}:${span.end}`;
     if (this.#references.has(key)) return;
@@ -193,6 +223,7 @@ export class Checker<T = unknown> {
 
   /** Records a binding's type at its definition site as well. */
   define(binding: Binding<T>, value: Span | Spanned, type: T): Binding<T> {
+    if (binding.name === "") return { ...binding, type };
     this.typed(value, type);
     this.facts.definitions.push({ ...binding, type });
     return { ...binding, type };
