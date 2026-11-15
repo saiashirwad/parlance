@@ -381,3 +381,25 @@ test("the Node loader runs a calc file that imports a schema file", () => {
     rmSync(dir, { recursive: true });
   }
 });
+test("a language can re-export imported bindings and keep their defining document", () => {
+  const reexporting: AnyLanguage = {
+    ...calc,
+    exports: (module: CalcModule) => [
+      ...calc.exports!(module),
+      ...module.imports.flatMap((group) => group.bindings.map(({ binding }) => binding)),
+    ],
+  };
+  const files = {
+    "memory://dir/c.calc": "let x = 1;\n",
+    "memory://dir/b.calc": 'use "./c.calc";\nlet y = x + 1;\n',
+    "memory://dir/a.calc": 'use "./b.calc";\nshow x + y;\n',
+  };
+  const graph = memory(files, [reexporting]);
+  const analysis = graph.analyze("memory://dir/a.calc");
+  assert.deepEqual(analysis.diagnostics, []);
+  assert.deepEqual([...graph.node("memory://dir/b.calc")!.exports.keys()].sort(), ["x", "y"]);
+  const reexported = graph.node("memory://dir/b.calc")!.exports.get("x")!;
+  assert.equal(reexported.uri, "memory://dir/c.calc");
+  const at = files["memory://dir/a.calc"].indexOf("x + y");
+  assert.equal(definitionAt(analysis.facts, at)?.uri, "memory://dir/c.calc");
+});
