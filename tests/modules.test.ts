@@ -273,3 +273,17 @@ test("the Node loader runs imported guest files", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /250 true/);
 });
+test("a non-guest import is an external edge: not analyzed, reported only when missing", () => {
+  const source = "schema A\nimport \"./helper.ts\";\nimport \"./gone.ts\";\nmodel A { id: Int @primary }\n";
+  const graph = memory({ "memory://dir/a.schema": source, "memory://dir/helper.ts": "export const x = 1;\n" });
+  const first = graph.analyze("memory://dir/a.schema");
+  const missing = first.diagnostics.filter((entry) => /Cannot resolve import/.test(entry.message));
+  assert.equal(missing.length, 1, first.diagnostics.map((entry) => entry.message).join("\n"));
+  assert.equal(source.slice(missing[0]!.span.start, missing[0]!.span.end), "./gone.ts");
+  const edge = graph.node("memory://dir/a.schema")!.imports[0]!;
+  assert.equal(edge.external, true);
+  assert.equal(edge.node, null);
+  assert.deepEqual(graph.order(), ["memory://dir/a.schema"]);
+  // An external edge does not force a rebuild.
+  assert.equal(graph.analyze("memory://dir/a.schema"), first);
+});

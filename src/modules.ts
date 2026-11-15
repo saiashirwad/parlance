@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { Binding, Dependency } from "./check/index.ts";
@@ -16,6 +16,8 @@ export type ResolvedImport = {
   readonly import: Import;
   readonly uri: string | null;
   readonly node: ModuleNode | null;
+  /** The target exists but is not a guest document (a `.ts` file, a package). It is not analyzed. */
+  readonly external?: boolean;
 };
 
 export type ModuleNode = {
@@ -78,6 +80,8 @@ const resolveUrl = (specifier: string, from: string): string | null => {
   }
 };
 
+const existsOnDisk = (uri: string): boolean => uri.startsWith("file:") && existsSync(fileURLToPath(uri));
+
 const languageFor = (languages: readonly AnyLanguage[], uri: string): AnyLanguage | undefined => {
   const path = documentPath(uri);
   return languages.find((language) => language.extensions.some((extension) => path.endsWith(extension)));
@@ -120,7 +124,7 @@ export class ModuleGraph {
     seen.add(uri);
     const stale: string[] = [];
     for (const edge of node.imports) {
-      if (edge.uri === null) continue;
+      if (edge.uri === null || edge.external) continue;
       const source = this.#read(edge.uri);
       if (edge.node === null) {
         // A missing import that now exists, or a cycle edge. Rebuild the
@@ -200,6 +204,13 @@ export class ModuleGraph {
         const cycle = [...ancestors.slice(start), target].map(shortName).join(" -> ");
         diagnostics.push(error(`Import cycle: ${cycle}`, entry.span));
         edges.push({ import: entry, uri: target, node: null });
+        continue;
+      }
+      if (!languageFor(this.#languages, target)) {
+        // A non-guest target. The TypeScript surface and the Node loader resolve it themselves.
+        const found = this.#read(target) !== null || existsOnDisk(target);
+        if (!found) diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
+        edges.push({ import: entry, uri: target, node: null, external: found });
         continue;
       }
       const targetSource = this.#read(target);
