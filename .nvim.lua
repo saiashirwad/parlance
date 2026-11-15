@@ -10,6 +10,7 @@ vim.filetype.add({
     [vim.pesc(root) .. "/.*%.calc"] = "calc",
     [vim.pesc(root) .. "/.*%.schema"] = "schema",
     [vim.pesc(root) .. "/.*%.machine"] = "machine",
+    [vim.pesc(root) .. "/.*%.gpu"] = "shade",
     [vim.pesc(root) .. "/.*%.parl"] = "parl",
   },
 })
@@ -17,7 +18,7 @@ vim.filetype.add({
 vim.lsp.config("parlance", {
   cmd = { "node", root .. "/src/lsp/cli.ts", "--config", root .. "/parlance.config.ts" },
   cmd_cwd = root,
-  filetypes = { "advanced", "calc", "schema", "machine", "parl", "typescript" },
+  filetypes = { "advanced", "calc", "schema", "machine", "shade", "parl", "typescript" },
   workspace_required = true,
   root_dir = function(bufnr, on_dir)
     if vim.startswith(vim.api.nvim_buf_get_name(bufnr), root .. "/") then

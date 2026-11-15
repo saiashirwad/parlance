@@ -13,21 +13,22 @@ Parlance is a toolkit for small languages that live inside TypeScript and Node. 
 ```sh
 pnpm install
 
-./parlance check examples/advanced/main.advanced examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine
+./parlance check examples/advanced/main.advanced examples/calc/demo.calc examples/schema/blog.schema examples/machine/order.machine examples/shade/particles.gpu
 
 ./parlance check examples/schema/catalog.schema examples/calc/imports.calc
 
 node --import ./examples/register.ts examples/typescript/advanced.ts
 node --import ./examples/register.ts examples/typescript/calc.ts
+node --import ./examples/register.ts examples/typescript/shade.ts
 
 pnpm check
 ```
 
-The check prints one `ok` line per file. The advanced command prints `The answer is:`, then `49` and the TypeScript consumer line `49 10 20 2 20 true 7`. The calc command prints `250` from the `show` in `demo.calc`, then `250 125 true` from `examples/typescript/calc.ts`. `pnpm check` runs the typecheck, the tests, the four example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation into guest files.
+The check prints one `ok` line per file. The advanced command prints `The answer is:`, then `49` and the TypeScript consumer line `49 10 20 2 20 true 7`. The calc command prints `250` from the `show` in `demo.calc`, then `250 125 true` from `examples/typescript/calc.ts`. The shade command prints struct layouts, two particles after one CPU step, and the WGSL entry point line. `pnpm check` runs the typecheck, the tests, the five example languages through the CLI and the loader, the LSP smoke test, and `tsgo` navigation into guest files.
 
 ## Neovim
 
-The repository-local `.nvim.lua` registers one `parlance` client for `.advanced`, `.calc`, `.schema`, `.machine`, and `.parl` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
+The repository-local `.nvim.lua` registers one `parlance` client for `.advanced`, `.calc`, `.schema`, `.machine`, `.gpu`, and `.parl` files, enables semantic tokens, and scopes the servers to this checkout. It also enables `runExternalCode` for the TypeScript content mapper. With `vim.o.exrc = true`, open any example and trust `.nvim.lua` once. `pnpm nvim:check` proves the real startup path in headless Neovim.
 
 See [`docs/06-neovim.md`](docs/06-neovim.md) for keymaps, a global config for other parlance projects, and troubleshooting.
 
@@ -60,6 +61,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`examples/advanced`](examples/advanced): a small functional language. Algebraic data types, exhaustive pattern matching, row-polymorphic records, let-generalization, explicit `forall`, and higher-rank arguments. A module body that returns a closed record exports each field, so a guest file imports typed values and constructors from another `.advanced` file. The TypeScript surface emits invariant ADT brands, generic constructor and value signatures, and cross-file type imports.
 - [`examples/calc`](examples/calc): expression language. Infers `number` and `boolean`, emits JavaScript directly, projects a TypeScript surface, and recovers after a malformed declaration.
 - [`examples/schema`](examples/schema): relational DSL. Checks models, enums, fields, references, and query results. Emits SQL, Drizzle, and Kysely targets, and runs queries through an interpreted `node:sqlite` runtime.
+- [`examples/shade`](examples/shade): GPU shader language. Structs with WGSL memory layout, uniform and storage buffers, functions, and compute entry points, fully typed with WGSL rules. Emits WGSL (validated with naga in the tests), exports typed pack/unpack helpers and binding info to TypeScript, runs kernels on the CPU in Node, and embeds as `gpu("Key")` snippets.
 - [`examples/machine`](examples/machine): state machine. Checks event and state legality, duplicate transitions, unreachable states, and a missing initial state. Projects a discriminated state and event union, and runs through an interpreted runtime.
 
 ## Docs
@@ -88,7 +90,7 @@ Working:
 - Snippets inside real `.ts` files: `schema("Blog")` followed by a template is typed through a `.embeds` stub the content mapper owns, runs under the Node loader, and gets diagnostics, hover, definition, completion, and tokens from the parlance LSP in TypeScript buffers. Holes are not supported yet.
 - Named targets with `parlance emit`.
 - Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in about 20 ms, or 16% of a full parse, with 99,998 of 100,000 items reused. On a 50 KB file an edit plus analyze takes about 1.6 ms. The LSP uses it; the checker still runs over the whole file.
-- The advanced, calc, schema, and machine examples, exercised by `pnpm check`.
+- The advanced, calc, schema, machine, and shade examples, exercised by `pnpm check`.
 
 Not built:
 

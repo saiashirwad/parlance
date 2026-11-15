@@ -1,0 +1,48 @@
+// A particle system stepped by one compute pass: gravity, drag, a floor bounce, and fading color.
+
+struct Particle {
+  position: vec3f,
+  velocity: vec3f,
+  color: vec4f,
+  age: f32,
+}
+
+struct Params {
+  dt: f32,
+  gravity: vec3f,
+  drag: f32,
+  lifetime: f32,
+}
+
+uniform params: Params;
+storage read_write particles: array<Particle>;
+
+/// The fraction of its life a particle has left, in [0, 1].
+fn remaining(age: f32) -> f32 {
+  return clamp(1.0 - age / params.lifetime, 0.0, 1.0);
+}
+
+fn bounce(p: Particle) -> Particle {
+  var out = p;
+  if out.position.y < 0.0 {
+    out.position.y = -out.position.y;
+    out.velocity.y = abs(out.velocity.y) * 0.5;
+  }
+  return out;
+}
+
+compute simulate[64] {
+  let i = global_id.x;
+  if i >= len(particles) { return; }
+
+  var p = particles[i];
+  p.velocity += params.gravity * params.dt;
+  p.velocity *= 1.0 - params.drag * params.dt;
+  p.position += p.velocity * params.dt;
+  p.age += params.dt;
+  p = bounce(p);
+
+  let fade = remaining(p.age);
+  p.color = vec4f(p.color.rgb, fade);
+  particles[i] = p;
+}

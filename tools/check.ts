@@ -32,7 +32,7 @@ const steps: readonly Step[] = [
     expect: ["self-host: compiled grammar parses itself"],
   },
   {
-    name: "check four example languages",
+    name: "check five example languages",
     command: [
       "./parlance",
       "check",
@@ -40,12 +40,14 @@ const steps: readonly Step[] = [
       "examples/calc/demo.calc",
       "examples/schema/blog.schema",
       "examples/machine/order.machine",
+      "examples/shade/particles.gpu",
     ],
     expect: [
       "ok examples/advanced/main.advanced",
       "ok examples/calc/demo.calc",
       "ok examples/schema/blog.schema",
       "ok examples/machine/order.machine",
+      "ok examples/shade/particles.gpu",
     ],
   },
   {
@@ -104,6 +106,21 @@ const steps: readonly Step[] = [
     name: "run machine through the Node loader",
     command: ["node", "--import", "./examples/register.ts", "examples/typescript/machine.ts"],
     expect: ["Paid Checkout Paid pay 50"],
+  },
+  {
+    name: "emit WGSL from a shade file",
+    command: ["./parlance", "emit", "--target", "wgsl", "examples/shade/particles.gpu"],
+    expect: ["@compute @workgroup_size(64, 1, 1)\nfn simulate(@builtin(global_invocation_id) global_id: vec3u) {"],
+  },
+  {
+    name: "run a shade compute kernel on the CPU through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/typescript/shade.ts"],
+    expect: ["Particle 64 16 16\nParams 48 16 28", "particle 0.095 0.907 0 | 0.95 -0.931 0 | alpha 0.95"],
+  },
+  {
+    name: "run an embedded shade snippet through the Node loader",
+    command: ["node", "--import", "./examples/register.ts", "examples/embed/kernel.ts"],
+    expect: ["12 24 36 48 2 64"],
   },
   { name: "drive the real LSP over an edit", command: ["node", "tools/lsp-smoke.ts"], expect: ["ok lsp edit scenario"] },
   { name: "tsgo navigates into guest files", command: ["node", "--test", "tests/tsgo.test.ts"] },

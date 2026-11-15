@@ -21,6 +21,7 @@ const grammars = [
   { path: "examples/calc/calc.parl", ast: "examples/calc/calc.ast.ts" },
   { path: "examples/schema/schema.parl", ast: "examples/schema/schema.ast.ts" },
   { path: "examples/machine/machine.parl", ast: "examples/machine/machine.ast.ts" },
+  { path: "examples/shade/shade.parl", ast: "examples/shade/shade.ast.ts" },
 ] as const;
 
 const failures: string[] = [];
