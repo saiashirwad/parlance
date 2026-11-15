@@ -99,6 +99,11 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly describe?: (binding: Binding<Type>) => string | undefined;
   /** Show binding types as inlay hints (needs `show`). Defaults to true. */
   readonly inlayHints?: boolean;
+  /**
+   * Snippets inside TypeScript files: `tag("Key")\`...\``. The content mapper types them through a
+   * `.embeds` stub, the Node loader runs them, and the LSP serves them inside `.ts` buffers.
+   */
+  readonly embed?: { readonly tag: string };
   /** Check a tree that has parse errors. Defaults to true so editor facts survive typing. */
   readonly checkPartial?: boolean;
 };

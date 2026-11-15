@@ -336,6 +336,7 @@ const runtime = (module: CalcModule): TsDoc => {
 export const calc = defineLanguage<File, CalcModule, Type>({
   name: "calc",
   extensions: [".calc"],
+  embed: { tag: "calc" },
   grammar,
   check,
   foreign: (file) =>

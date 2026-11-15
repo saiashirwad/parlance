@@ -1,0 +1,2 @@
+# The typed tag functions for snippets in the TypeScript files under this directory.
+# The parlance content mapper generates them; the Node loader serves the runtime.

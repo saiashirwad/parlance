@@ -1425,6 +1425,7 @@ const kysely = (module: SchemaModule): string => [
 export const schema = defineLanguage<File, SchemaModule, Checked>({
   name: "schema",
   extensions: [".schema"],
+  embed: { tag: "schema" },
   grammar,
   check,
   imports: (file) =>
