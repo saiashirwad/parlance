@@ -231,7 +231,7 @@ test("Particle and Params in particles.gpu have the documented layout", () => {
 const wgslOf = (source: string): string => {
   const analysis = run(source);
   assert.deepEqual(analysis.diagnostics, []);
-  return shade.targets!.wgsl!(analysis.ir).text;
+  return shade.targets!.wgsl!(analysis.ir!).text;
 };
 
 test("particles.gpu emits the expected WGSL", () => {
@@ -245,7 +245,7 @@ test("particles.gpu emits the expected WGSL", () => {
       "arrayLength(&particles)",
     ]
   ) assert.ok(text.includes(expected), expected);
-  assert.equal(shade.targets!.wgsl!(run(particles).ir).fileName, "shader.wgsl");
+  assert.equal(shade.targets!.wgsl!(run(particles).ir!).fileName, "shader.wgsl");
 });
 
 const matrices = `struct Camera {
