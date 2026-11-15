@@ -42,7 +42,8 @@ const loadRuntime = async (program: string) => {
   const module = analyzeModule(program);
   const directory = mkdtempSync(join(tmpdir(), "parlance-schema-"));
   const file = join(directory, "schema.module.ts");
-  writeFileSync(file, schema.runtime!(module));
+  const emitted = schema.runtime!(module);
+  writeFileSync(file, typeof emitted === "string" ? emitted : emitted.text);
   const loaded = await import(`${pathToFileURL(file).href}?${Date.now()}`);
   return {
     db: loaded.open(":memory:") as Record<string, (params?: Record<string, unknown>) => any> & {
