@@ -352,7 +352,7 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
         }
         const info = context.types.get(name);
         if (!info) {
-          error(`Unknown type ${JSON.stringify(name)}`, syntax.name);
+          cx.unknown("type", name, syntax.name, [...context.types.keys(), "number", "boolean", "string"]);
           return fresh(context.level);
         }
         const binding = context.typeBindings.get(name);
@@ -779,7 +779,7 @@ const run = (file: File, cx: Checker<Type>): AdvancedModule => {
         const binding = cx.resolve(expr.value.text, expr.value);
         const entry = lookupEntry(expr.value.text);
         if (!binding || !entry) {
-          error(`Unknown name ${JSON.stringify(expr.value.text)}`, expr.value);
+          cx.unknown("name", expr.value.text, expr.value);
           return placeholder(expr.span);
         }
         if (entry.constructor) {

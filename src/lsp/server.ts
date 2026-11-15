@@ -11,6 +11,8 @@ import {
   InlayHintKind,
   MarkupKind,
   PositionEncodingKind,
+  CodeActionKind,
+  type CodeAction,
   type Range,
   type SymbolInformation,
   SymbolKind,
@@ -29,7 +31,7 @@ import {
   tokenKinds,
   typeAt,
 } from "../check/index.ts";
-import { diagnostic, site } from "../diagnostic.ts";
+import { type Diagnostic, diagnostic, site } from "../diagnostic.ts";
 import { diff } from "../source.ts";
 import type { Span } from "../source.ts";
 import { analyze, extensionMap, type AnyLanguage, type CompletionKind } from "../language.ts";
@@ -95,6 +97,21 @@ const range = (document: TextDocument, span: Span): Range => ({
   start: document.positionAt(span.start),
   end: document.positionAt(span.end),
 });
+
+const lspDiagnostic = (document: TextDocument, entry: Diagnostic): LspDiagnostic | undefined => {
+  const location = site(entry, document.uri);
+  if (location.uri !== document.uri) return undefined;
+  return {
+    range: range(document, location.span),
+    severity: entry.severity === "error"
+      ? DiagnosticSeverity.Error
+      : entry.severity === "warning"
+      ? DiagnosticSeverity.Warning
+      : DiagnosticSeverity.Information,
+    source: "parlance",
+    message: entry.context?.length ? `${entry.message}\n${entry.context.join(" > ")}` : entry.message,
+  };
+};
 
 export type ServerOptions = {
   readonly input?: NodeJS.ReadableStream;
@@ -174,6 +191,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       documentSymbolProvider: true,
       foldingRangeProvider: true,
       completionProvider: { triggerCharacters: ["@"] },
+      codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
       inlayHintProvider: true,
       workspaceSymbolProvider: true,
       renameProvider: true,
@@ -214,19 +232,8 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       uri: document.uri,
       version: document.version,
       diagnostics: analysis.diagnostics.flatMap((entry) => {
-        const location = site(entry, document.uri);
-        if (location.uri !== document.uri) return [];
-        const item: LspDiagnostic = {
-          range: range(document, location.span),
-          severity: entry.severity === "error"
-            ? DiagnosticSeverity.Error
-            : entry.severity === "warning"
-            ? DiagnosticSeverity.Warning
-            : DiagnosticSeverity.Information,
-          source: "parlance",
-          message: entry.context?.length ? `${entry.message}\n${entry.context.join(" > ")}` : entry.message,
-        };
-        return [item];
+        const item = lspDiagnostic(document, entry);
+        return item === undefined ? [] : [item];
       }),
     });
   };
@@ -356,6 +363,31 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       }
     }
     return found;
+  });
+
+  connection.onCodeAction(({ textDocument, range: wanted }) => {
+    const document = documents.get(textDocument.uri);
+    const analysis = analysisFor(textDocument.uri);
+    if (!document || !analysis) return [];
+    const from = document.offsetAt(wanted.start);
+    const to = document.offsetAt(wanted.end);
+    const actions: CodeAction[] = [];
+    for (const entry of analysis.diagnostics) {
+      const { fix } = entry;
+      const item = fix && lspDiagnostic(document, entry);
+      if (!fix || !item) continue;
+      const span = site(entry, document.uri).span;
+      if (span.end < from || span.start > to) continue;
+      actions.push({
+        title: fix.title,
+        kind: CodeActionKind.QuickFix,
+        diagnostics: [item],
+        edit: {
+          changes: { [document.uri]: fix.edits.map((edit) => ({ range: range(document, edit.span), newText: edit.newText })) },
+        },
+      });
+    }
+    return actions;
   });
 
   connection.onFoldingRanges(({ textDocument }) => {

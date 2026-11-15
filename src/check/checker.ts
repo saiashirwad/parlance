@@ -5,6 +5,7 @@ import {
   type Related,
 } from "../diagnostic.ts";
 import type { ErrorNode, Span } from "../source.ts";
+import { didYouMean } from "./suggest.ts";
 import {
   type Binding,
   type DefinitionKind,
@@ -111,6 +112,17 @@ export class Checker<T = unknown> {
   error(message: string, value: Span | Spanned, options: CheckOptions = {}): void {
     if (isMissing(value)) return;
     this.facts.diagnostics.push(diagnostic(message, at(value), { ...options, severity: "error" }));
+  }
+
+  /**
+   * Reports an unknown name as `Unknown <noun> "<name>"`, with a "did you mean" quick fix for the
+   * nearest name in `candidates` (default: the names in scope here).
+   */
+  unknown(noun: string, name: string, value: Span | Spanned, candidates?: Iterable<string>): void {
+    if (isMissing(value)) return;
+    const names = candidates ?? this.#scopes.flatMap((scope) => [...scope.keys()]);
+    const fix = didYouMean(name, at(value), names);
+    this.error(`Unknown ${noun} ${JSON.stringify(name)}`, value, fix === undefined ? {} : { fix });
   }
 
   warn(message: string, value: Span | Spanned, options: CheckOptions = {}): void {

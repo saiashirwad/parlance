@@ -581,3 +581,46 @@ test("workspace symbols search every analyzed document", async () => {
     client.close();
   }
 });
+
+test("an unknown name offers a did-you-mean quick fix", async () => {
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    const typo = "let total = 1;\nshow totl * 2;\n";
+    const published = await client.open(uri, typo);
+    assert.match(published.params.diagnostics[0].message, /Unknown name "totl"/);
+    const range = published.params.diagnostics[0].range;
+    const actions = await client.request("textDocument/codeAction", {
+      textDocument: { uri },
+      range,
+      context: { diagnostics: published.params.diagnostics },
+    });
+    assert.equal(actions.result.length, 1);
+    assert.equal(actions.result[0].title, 'Did you mean "total"?');
+    assert.equal(actions.result[0].kind, "quickfix");
+    assert.deepEqual(actions.result[0].edit.changes[uri], [{ range, newText: "total" }]);
+
+    // A name nothing resembles gets no fix; neither does a request elsewhere in the file.
+    const far = "let total = 1;\nshow zzzzzz;\n";
+    const unrelated = await client.open(pathToFileURL("/virtual/far.calc").href, far);
+    assert.equal(unrelated.params.diagnostics.length, 1);
+    const none = await client.request("textDocument/codeAction", {
+      textDocument: { uri: pathToFileURL("/virtual/far.calc").href },
+      range: unrelated.params.diagnostics[0].range,
+      context: { diagnostics: [] },
+    });
+    assert.deepEqual(none.result, []);
+
+    const advancedUri = pathToFileURL("/virtual/fix.advanced").href;
+    const advanced = await client.open(advancedUri, "let count = 1 in\ncout\n");
+    const fix = await client.request("textDocument/codeAction", {
+      textDocument: { uri: advancedUri },
+      range: advanced.params.diagnostics[0].range,
+      context: { diagnostics: [] },
+    });
+    assert.equal(fix.result[0]?.title, 'Did you mean "count"?');
+  } finally {
+    client.close();
+  }
+});

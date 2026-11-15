@@ -310,6 +310,16 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
     return undefined;
   };
 
+  /** Names a reference at `site` could have meant: what `lookup` sees, plus builtins of its kind. */
+  const candidates = (ref: BindRef, site: Text): string[] => {
+    const names: string[] = [];
+    for (let at: Scope<T> | null = walker.scope; at; at = at.parent) {
+      for (const [name, entry] of at.names) if (entry.def.label === ref.label && entry.from <= site.span.start) names.push(name);
+    }
+    for (const entry of spec.builtins) if (entry.label === ref.label) names.push(entry.name);
+    return names;
+  };
+
   const seen = new Map<object, Set<string>>();
   walker.walk(root, (node) => {
     if (rejected.has(node)) skipping++;
@@ -366,7 +376,7 @@ export const bind = <T>(root: unknown, cx: Checker<T>, spec: BindSpec, options: 
           builtinSites.set(site, builtin.name);
           continue;
         }
-        if (!quiet) cx.error(`Unknown ${ref.noun} ${quote(site.text)}`, site);
+        if (!quiet) cx.unknown(ref.noun, site.text, site, candidates(ref, site));
         quiet = true;
       }
     }

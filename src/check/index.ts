@@ -30,6 +30,7 @@ export {
   type Bound,
   boundImports,
 } from "./bind.ts";
+export { closest, didYouMean } from "./suggest.ts";
 export {
   at,
   type CheckOptions,
