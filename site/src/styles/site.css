@@ -141,6 +141,7 @@ button, select { font: inherit; color: inherit; }
 .status[data-state="starting"]::after { content: "…"; }
 .status[data-state="ready"] { display: none; }
 .status[data-state="error"] { color: var(--error); }
+.status[data-state="note"] { color: var(--muted); }
 
 .github { display: inline-flex; padding: 6px; border-radius: 6px; color: var(--faint); }
 .github:hover { color: var(--fg); background: var(--hover); }
@@ -197,7 +198,47 @@ button, select { font: inherit; color: inherit; }
   height: 1px;
   background: var(--fg);
 }
-.file-tab { font-family: var(--mono); font-size: 12px; }
+.file-tab { font-family: var(--mono); font-size: 12px; padding-right: 20px; }
+.file-tab[aria-selected="true"]::after { right: 20px; }
+.file-tab:focus-visible { outline: none; color: var(--fg); }
+.file-tab .close {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  translate: 0 -50%;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.file-tab:hover .close { opacity: 1; }
+.file-tab .close:hover { color: var(--fg); background: var(--hover); }
+.tabs[data-single="true"] .close { display: none; }
+.tab.add { padding: 0 8px; font-size: 14px; color: var(--faint); opacity: 0.7; }
+.tab.add:hover { opacity: 1; color: var(--muted); }
+.tab-input {
+  align-self: center;
+  height: 22px;
+  margin: 0 4px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--raised);
+  color: var(--fg);
+  font: 12px var(--mono);
+  outline: none;
+}
+.tab-input:focus { border-color: var(--accent); }
+.tab-input[aria-invalid="true"] { border-color: var(--error); }
 .tab .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--error); }
 .tab .count { color: var(--error); font-size: 11.5px; font-variant-numeric: tabular-nums; }
 
@@ -206,6 +247,10 @@ button, select { font: inherit; color: inherit; }
 
 .editors { position: relative; flex: 1; min-height: 0; }
 .editors > .cm-editor { position: absolute; inset: 0; }
+/* Lines a link names: a quiet band, and the line numbers in the accent. */
+.cm-editor .cm-linked { background: var(--match); }
+.cm-editor .cm-linked-gutter { color: var(--accent); }
+.cm-editor .cm-lineNumbers .cm-gutterElement { cursor: pointer; }
 
 /* ---- output ----------------------------------------------------------------------------- */
 

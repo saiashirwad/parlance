@@ -93,6 +93,11 @@ const handlers = {
     }
     return null;
   },
+  /** Drops every file under a directory, when a workspace reloads. */
+  clear: ({ prefix }: { prefix: string }) => {
+    for (const path of [...files.keys()]) if (path.startsWith(prefix)) files.delete(path);
+    return null;
+  },
   diagnostics: ({ path }: { path: string }) => {
     if (!files.has(path)) return [];
     return [...service.getSyntacticDiagnostics(path), ...service.getSemanticDiagnostics(path)].map((diagnostic) => ({
