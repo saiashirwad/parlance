@@ -41,5 +41,7 @@ export {
   Checker,
   type Dependency,
   type Dependencies,
+  type ForeignModule,
+  type ForeignSource,
   type Spanned,
 } from "./checker.ts";

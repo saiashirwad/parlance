@@ -5,6 +5,7 @@ import {
   type DefinitionKind,
   type Dependency,
   type Facts,
+  type ForeignSource,
   semanticTokens,
   type Token,
 } from "./check/index.ts";
@@ -30,6 +31,16 @@ export const importSpecifier = (literal: { readonly text: string; readonly span:
     // Keep the unescaped text; the graph will report a missing file.
   }
   return { specifier: value, span: { start: literal.span.start + 1, end: literal.span.end - 1 } };
+};
+
+/** True for a package specifier (`left-pad`, `@scope/pkg/x`), false for a relative path, absolute path, or URL. */
+export const isBareSpecifier = (specifier: string): boolean => !/^(\.{0,2}\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(specifier);
+
+/** A guest import of names from a non-guest module, such as a `.ts` file or a package. */
+export type ForeignImport = {
+  readonly specifier: Import;
+  /** The imported names and where each is written in the guest file. */
+  readonly names: readonly { readonly name: string; readonly span: Span }[];
 };
 
 export type Artifact = {
@@ -63,6 +74,12 @@ export type Language<Ast = unknown, Ir = unknown, Type = unknown> = {
   readonly check: (file: Ast, cx: Checker<Type>) => Ir;
   /** Declares the file's imports. The module graph parses, resolves, and analyzes them. */
   readonly imports?: (file: Ast) => readonly Import[];
+  /**
+   * Declares names imported from non-guest modules. The graph resolves each specifier (a missing
+   * file or unknown package is reported at the specifier) and the checker declares the names with
+   * `cx.foreign(type)`. `foreignImports` and `foreignRuntime` from `parlance/ts` emit them.
+   */
+  readonly foreign?: (file: Ast) => readonly ForeignImport[];
   /** The bindings this module exposes to importers. */
   readonly exports?: (module: Ir) => readonly Binding<Type>[];
   /** TypeScript surface, with source mappings where identifiers correspond to guest text. */
@@ -159,6 +176,8 @@ export type AnalysisContext<Type = unknown> = {
   readonly dependencies?: readonly Dependency<Type>[];
   /** Diagnostics produced before checking, such as unresolved imports or cycles. */
   readonly diagnostics?: readonly Diagnostic[];
+  /** Resolved non-guest imports, for `Checker.foreign`. */
+  readonly foreign?: readonly ForeignSource[];
 };
 
 /** Parse, check, and collect every fact the editor and hosts need. Never throws on guest input. */
@@ -185,6 +204,7 @@ export const analyzeParsed = <Ast, Ir, Type>(
     [],
     [...parsed.diagnostics, ...(context.diagnostics ?? [])],
     context.dependencies ?? [],
+    context.foreign ?? [],
   );
   let ir: Ir | null = null;
   if (parsed.value !== null && (parsed.ok || language.checkPartial !== false)) {

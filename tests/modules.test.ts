@@ -319,3 +319,65 @@ test("a custom resolve replaces the default and loads from a project config", as
     rmSync(directory, { recursive: true });
   }
 });
+test("foreign imports declare opaque names, report a missing file at the specifier, and emit mapped imports", () => {
+  const source = 'from "./rates.ts" use taxRate;\nfrom "./gone.ts" use nothing;\nlet tax = 100 * taxRate;\nshow tax;\n';
+  const files = { "memory://dir/a.calc": source, "memory://dir/rates.ts": "export const taxRate = 0.2;\n" };
+  const analysis = memory(files, [calc]).analyze("memory://dir/a.calc");
+  const messages = analysis.diagnostics.map((entry) => entry.message);
+  assert.deepEqual(messages, ['Cannot resolve import "./gone.ts"']);
+  assert.equal(source.slice(analysis.diagnostics[0]!.span.start, analysis.diagnostics[0]!.span.end), "./gone.ts");
+  const module = analysis.ir as CalcModule;
+  const surface = calc.typescript!(module);
+  assert.match(surface.text, /^import \{ taxRate \} from "\.\/rates\.ts";\nimport \{ nothing \} from "\.\/gone\.ts";/);
+  assert.match(surface.text, /export const tax = 100 \* taxRate;/);
+  const runtime = calc.runtime!(module);
+  assert.match(typeof runtime === "string" ? runtime : runtime.text, /^import \{ taxRate as _v0 \} from "\.\/rates\.ts";/);
+});
+
+test("a foreign name that is already defined is reported", () => {
+  const source = 'from "./rates.ts" use taxRate, taxRate;\nshow taxRate;\n';
+  const analysis = memory({ "memory://dir/a.calc": source, "memory://dir/rates.ts": "" }, [calc]).analyze("memory://dir/a.calc");
+  assert.deepEqual(analysis.diagnostics.map((entry) => entry.message), ['Duplicate name "taxRate"']);
+});
+
+test("calc imports a TypeScript file at runtime through the Node loader", () => {
+  const script = "const m = await import('./examples/calc/priced.calc'); console.log(m.default, m.tax);";
+  const result = spawnSync(process.execPath, ["--import", "./examples/register.ts", "--input-type=module", "-e", script], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^20\n20 20\n$/);
+});
+
+test("a calc file can import a schema file: models are not runtime values", () => {
+  const files = {
+    "memory://dir/a.calc": 'use "./b.schema";\nlet n = 1;\nshow User;\n',
+    "memory://dir/b.schema": "schema B\nmodel User { id: Int @primary }\n",
+  };
+  const analysis = memory(files, [calc, schema]).analyze("memory://dir/a.calc");
+  const messages = analysis.diagnostics.map((entry) => entry.message);
+  assert.deepEqual(messages, ['"User" is not available at runtime']);
+  const clean = memory({ ...files, "memory://dir/a.calc": 'use "./b.schema";\nlet n = 1;\nshow n;\n' }, [calc, schema])
+    .analyze("memory://dir/a.calc");
+  assert.deepEqual(clean.diagnostics, []);
+  const runtime = calc.runtime!(clean.ir as CalcModule);
+  assert.doesNotMatch(typeof runtime === "string" ? runtime : runtime.text, /import/);
+});
+
+test("the Node loader runs a calc file that imports a schema file", () => {
+  const dir = mkdtempSync(join(root, ".tmp-interop-"));
+  try {
+    writeFileSync(join(dir, "m.schema"), "schema M\nmodel User { id: Int @primary }\n");
+    writeFileSync(join(dir, "a.calc"), 'use "./m.schema";\nlet n = 41 + 1;\nshow n;\n');
+    const script = `const m = await import(${JSON.stringify(join(dir, "a.calc"))}); console.log(m.default);`;
+    const result = spawnSync(process.execPath, ["--import", "./examples/register.ts", "--input-type=module", "-e", script], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /42/);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
+});

@@ -2,13 +2,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import type { Binding, Dependency } from "./check/index.ts";
+import type { Binding, Dependency, ForeignSource } from "./check/index.ts";
 import { type Diagnostic, error, route, withDocument } from "./diagnostic.ts";
 import {
   type Analysis,
   analyzeParsed,
   type AnyLanguage,
   type Import,
+  isBareSpecifier,
 } from "./language.ts";
 import type { IncrementalStats } from "./parser/incremental.ts";
 import type { ParseResult } from "./parser/parse.ts";
@@ -72,8 +73,6 @@ const readDisk = (uri: string): string | null => {
   }
 };
 
-const bare = (specifier: string): boolean => !/^(\.{0,2}\/|[A-Za-z][A-Za-z0-9+.-]*:)/.test(specifier);
-
 /**
  * The default resolver. Relative and absolute specifiers resolve as URLs from the importer. A bare
  * specifier goes through Node package resolution from the importer's directory, so `node_modules`
@@ -81,7 +80,7 @@ const bare = (specifier: string): boolean => !/^(\.{0,2}\/|[A-Za-z][A-Za-z0-9+.-
  */
 export const defaultResolve = (specifier: string, from: string): string | null => {
   try {
-    if (bare(specifier)) return from.startsWith("file:") ? pathToFileURL(createRequire(from).resolve(specifier)).href : null;
+    if (isBareSpecifier(specifier)) return from.startsWith("file:") ? pathToFileURL(createRequire(from).resolve(specifier)).href : null;
     const url = new URL(specifier, from);
     return url.href;
   } catch {
@@ -195,13 +194,14 @@ export class ModuleGraph {
 
     const tree = parsed ?? language.grammar.parse(source);
     const imports = tree.value === null ? [] : language.imports?.(tree.value) ?? [];
+    const foreignImports = tree.value === null ? [] : language.foreign?.(tree.value) ?? [];
     const diagnostics: Diagnostic[] = [];
     const dependencies: Dependency[] = [];
     const edges: ResolvedImport[] = [];
     const ancestors = [...stack, uri];
     const seen = new Set<string>();
 
-    for (const entry of imports) {
+    for (const entry of [...imports, ...foreignImports.map((foreign) => foreign.specifier)]) {
       const target = this.#resolve(entry.specifier, uri);
       if (target === null) {
         diagnostics.push(error(`Cannot resolve import ${JSON.stringify(entry.specifier)}`, entry.span));
@@ -213,6 +213,11 @@ export class ModuleGraph {
         const cycle = [...ancestors.slice(start), target].map(shortName).join(" -> ");
         diagnostics.push(error(`Import cycle: ${cycle}`, entry.span));
         edges.push({ import: entry, uri: target, node: null });
+        continue;
+      }
+      if (foreignImports.some((foreign) => foreign.specifier === entry) && languageFor(this.#languages, target)) {
+        diagnostics.push(error(`${JSON.stringify(entry.specifier)} is a guest file; use the language's own import`, entry.span));
+        edges.push({ import: entry, uri: target, node: null, external: true });
         continue;
       }
       if (!languageFor(this.#languages, target)) {
@@ -252,13 +257,19 @@ export class ModuleGraph {
       edges.push({ import: entry, uri: target, node });
     }
 
+    const foreign: ForeignSource[] = foreignImports.map((entry) => ({
+      specifier: entry.specifier.specifier,
+      span: entry.specifier.span,
+      uri: edges.find((edge) => edge.import === entry.specifier)?.uri ?? null,
+      names: entry.names,
+    }));
     const analysis = analyzeParsed(
       language,
       source,
       uri,
       tree,
       incremental,
-      { dependencies, diagnostics },
+      { dependencies, diagnostics, foreign },
     );
     let exports: Map<string, Binding> | null = null;
     const node: ModuleNode = {

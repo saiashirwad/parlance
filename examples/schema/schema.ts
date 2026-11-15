@@ -1429,7 +1429,9 @@ export const schema = defineLanguage<File, SchemaModule, Checked>({
   check,
   imports: (file) =>
     file.declarations.flatMap((entry) => entry.kind === "import" ? [importSpecifier(entry.specifier)] : []),
-  exports: (module) => [...module.enums, ...module.models, ...module.queries].map((entry) => entry.binding),
+  // The runtime module exports `sql` and `open` only, so no declaration is a runtime value.
+  exports: (module) =>
+    [...module.enums, ...module.models, ...module.queries].map((entry) => ({ ...entry.binding, runtime: false as const })),
   typescript: types,
   runtime,
   show: (type) => type.kind === "query" || type.kind === "mutation" ? signatureText(type) : display(type),

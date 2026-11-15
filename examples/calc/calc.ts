@@ -1,11 +1,11 @@
 import { readFileSync } from "node:fs";
-import { bind, type Binding, type Bound, type Checker, type Spanned } from "../../src/check/index.ts";
+import { bind, type Binding, type Bound, type Checker, type ForeignModule, type Spanned } from "../../src/check/index.ts";
 import { type Diagnostic, error } from "../../src/diagnostic.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
-import { defineLanguage } from "../../src/language.ts";
+import { defineLanguage, importSpecifier } from "../../src/language.ts";
 import type { Span, Text } from "../../src/source.ts";
-import { source, synth, ts, type TsDoc } from "../../src/ts/index.ts";
+import { foreignImports, foreignRuntime, source, synth, ts, type TsDoc } from "../../src/ts/index.ts";
 import { TypeStore, type Type } from "../../src/types/index.ts";
 import type { BooleanLit, Decl, Expr, File, Name } from "./calc.ast.ts";
 
@@ -29,8 +29,15 @@ type CalcExpr =
   | { readonly span: Span; readonly kind: "prefix"; readonly operator: string; readonly operand: CalcExpr };
 
 type CalcDecl =
-  | { readonly span: Span; readonly kind: "let"; readonly name: Text; readonly binding: Binding<Type>; readonly value: CalcExpr }
-  | { readonly span: Span; readonly kind: "show"; readonly value: CalcExpr };
+  | {
+    readonly span: Span;
+    readonly kind: "let";
+    readonly name: Text;
+    readonly binding: Binding<Type>;
+    readonly value: CalcExpr;
+    readonly valueSpan: Span;
+  }
+  | { readonly span: Span; readonly kind: "show"; readonly value: CalcExpr; readonly valueSpan: Span };
 
 type CalcImport = {
   readonly specifier: string;
@@ -38,6 +45,9 @@ type CalcImport = {
 };
 
 export type CalcModule = {
+  readonly source: string;
+  /** Names imported from TypeScript; their type is opaque here and tsgo checks them. */
+  readonly foreign: readonly ForeignModule<Type>[];
   readonly declarations: readonly CalcDecl[];
   readonly imports: readonly CalcImport[];
   readonly result: CalcExpr | null;
@@ -101,6 +111,9 @@ const checkExpr = (expr: Expr, context: ExprContext): CalcExpr => {
         const type = store.unknown();
         context.result = type;
         return { span: expr.span, kind: "number", value: 0 };
+      }
+      if (binding.runtime === false) {
+        cx.error(`${JSON.stringify(binding.name)} is not available at runtime`, expr.value);
       }
       const type = binding.type ?? store.unknown();
       cx.typed(expr, type);
@@ -181,15 +194,18 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       const binding = cx.imported(name);
       if (!binding) continue;
       importedFrom.set(name, dependency.specifier);
-      bindings.push({ exported: name, binding });
+      // A type or model has no runtime export; the runtime module imports only values.
+      if (exported.runtime !== false) bindings.push({ exported: exported.runtime ?? name, binding });
     }
     if (bindings.length > 0) imports.push({ specifier: dependency.specifier, bindings });
   }
+  // Names from TypeScript: opaque to this checker, so uses never report; tsgo checks them.
+  const foreign = cx.foreign(store.unknown());
   const bound = bind(file, cx, grammar.bind!, { accept: (name) => !reserved.has(name.text) });
   const context: ExprContext = { cx, bound, store, result: store.unknown() };
   for (let index = 0; index < file.declarations.length; index++) {
     const declaration = file.declarations[index]!;
-    if (declaration.kind === "import") continue;
+    if (declaration.kind === "import" || declaration.kind === "tsimport") continue;
     if (declaration.kind === "let") {
       const name = declaration.name;
       if (reserved.has(name.text)) {
@@ -202,18 +218,48 @@ const check = (file: File, cx: Checker<Type>): CalcModule => {
       const valueType = context.result;
       if (cx.isMissing(name)) continue;
       const binding = bound.define(declaration, valueType)!;
-      declarations.push({ span: declaration.span, kind: "let", name, binding, value });
+      declarations.push({ span: declaration.span, kind: "let", name, binding, value, valueSpan: declaration.value.span });
     } else {
       const value = checkExpr(declaration.value, context);
-      declarations.push({ span: declaration.span, kind: "show", value });
+      declarations.push({ span: declaration.span, kind: "show", value, valueSpan: declaration.value.span });
       result = value;
       resultType = context.result;
     }
   }
-  return { declarations, imports, result, resultType };
+  return { source: cx.source, foreign, declarations, imports, result, resultType };
+};
+
+/**
+ * Modules that use TypeScript names are emitted as real TypeScript: guest expression text is valid
+ * TypeScript verbatim, so tsgo infers the types and reports errors at the guest span.
+ */
+const foreignSurface = (module: CalcModule) => {
+  let shows = 0;
+  let last: string | null = null;
+  const imports = module.imports.map((group) =>
+    ts`import { ${
+      group.bindings.map(({ exported, binding }) => exported === binding.name ? exported : `${exported} as ${binding.name}`)
+        .join(", ")
+    } } from ${JSON.stringify(group.specifier)};
+`
+  );
+  return ts`${foreignImports(module.foreign)}${imports}${
+    module.declarations.map((declaration) => {
+      const body = source(module.source.slice(declaration.valueSpan.start, declaration.valueSpan.end), declaration.valueSpan);
+      if (declaration.kind === "let") {
+        return ts`export const ${source(declaration.name)} = ${body};
+`;
+      }
+      last = `_show${shows}`;
+      return ts`const _show${shows++} = ${body};
+`;
+    })
+  }${last ? `export default ${last};
+` : ""}`;
 };
 
 const types = (module: CalcModule) => {
+  if (module.foreign.some((group) => group.names.length > 0)) return foreignSurface(module);
   const show = (type: Type | null) => (type === null ? "unknown" : new TypeStore().show(type));
   return ts`${
     module.declarations.flatMap((declaration) =>
@@ -257,6 +303,7 @@ const runtime = (module: CalcModule): TsDoc => {
         return ts`${synth(`(${value.operator}`, value.span)}${expr(value.operand)})`;
     }
   };
+  const foreignLines = foreignRuntime(module.foreign, temp);
   const importLines = module.imports.map((group) => {
     const pairs = group.bindings.map(({ exported, binding }) => {
       const local = temp(binding);
@@ -281,7 +328,7 @@ const runtime = (module: CalcModule): TsDoc => {
       last = name;
     }
   }
-  return ts`${importLines}${lines}${exported.length ? `export { ${exported.join(", ")} };${"\n"}` : ""}${
+  return ts`${foreignLines}${importLines}${lines}${exported.length ? `export { ${exported.join(", ")} };${"\n"}` : ""}${
     last ? `export default ${last};${"\n"}` : ""
   }`;
 };
@@ -291,6 +338,15 @@ export const calc = defineLanguage<File, CalcModule, Type>({
   extensions: [".calc"],
   grammar,
   check,
+  foreign: (file) =>
+    file.declarations.flatMap((entry) =>
+      entry.kind === "tsimport"
+        ? [{
+          specifier: importSpecifier(entry.specifier),
+          names: entry.names.flatMap((name) => name.text === "" ? [] : [{ name: name.text, span: name.span }]),
+        }]
+        : []
+    ),
   exports: (module) =>
     module.declarations.flatMap((declaration) => declaration.kind === "let" ? [declaration.binding] : []),
   typescript: types,

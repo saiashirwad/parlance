@@ -29,8 +29,18 @@ export interface DeclShowNode {
 
 export type Decl =
   | Import
+  | TsImport
   | DeclLetNode
   | DeclShowNode;
+
+export interface TsImportTsimportNode {
+  readonly kind: "tsimport";
+  readonly specifier: Text;
+  readonly names: readonly Name[];
+  readonly span: Span;
+}
+
+export type TsImport = TsImportTsimportNode;
 
 export interface ImportImportNode {
   readonly kind: "import";

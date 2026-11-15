@@ -47,6 +47,20 @@ export type Dependencies<Type = unknown> = {
   readonly of: (specifier: string) => Dependency<Type> | undefined;
 };
 
+/** A name imported from a non-guest module, as declared by `Language.foreign` and resolved by the graph. */
+export type ForeignSource = {
+  /** The specifier exactly as written. */
+  readonly specifier: string;
+  /** The specifier's span in the importing file. */
+  readonly span: Span;
+  /** The resolved document URI, or null when resolution failed (already reported). */
+  readonly uri: string | null;
+  readonly names: readonly { readonly name: string; readonly span: Span }[];
+};
+
+/** A foreign import after `Checker.foreign` declared its names; `bindings` parallels `names`. */
+export type ForeignModule<Type = unknown> = ForeignSource & { readonly bindings: readonly Binding<Type>[] };
+
 class AbortCheck extends Error {
   constructor() {
     super("check aborted");
@@ -67,6 +81,7 @@ export class Checker<T = unknown> {
   readonly source: string;
   readonly facts: Facts<T>;
   readonly dependencies: Dependencies<T>;
+  readonly #foreign: readonly ForeignSource[];
   readonly #scopes: Map<string, Binding<T>>[] = [new Map()];
   /** Parallel to `#scopes`: bindings bound there that still need a visibility extent. */
   readonly #bound: Binding<T>[][] = [[]];
@@ -81,7 +96,9 @@ export class Checker<T = unknown> {
     tokens: readonly Token[] = [],
     diagnostics: readonly Diagnostic[] = [],
     dependencies: readonly Dependency<T>[] = [],
+    foreign: readonly ForeignSource[] = [],
   ) {
+    this.#foreign = foreign;
     this.uri = uri;
     this.source = source;
     this.facts = emptyFacts<T>([...diagnostics], [...tokens], uri);
@@ -226,6 +243,28 @@ export class Checker<T = unknown> {
     };
     if (name !== "") this.facts.definitions.push(binding);
     return binding;
+  }
+
+  /**
+   * Declares and binds every name the language imported from a non-guest module, typed `type`.
+   * Pass a type that unifies with anything (an unknown or poison type): the guest checker cannot
+   * know the TypeScript type, so it must not report uses. The TypeScript surface carries the real
+   * check. A name that is already in scope is reported and left unbound.
+   */
+  foreign(type: T): readonly ForeignModule<T>[] {
+    return this.#foreign.map((group) => ({
+      ...group,
+      bindings: group.names.map((entry) => {
+        const binding = this.declare(entry.name, entry.span, "variable", type, {
+          detail: `from ${JSON.stringify(group.specifier)}`,
+        });
+        if (entry.name !== "" && this.resolve(entry.name, undefined)) {
+          this.error(`Duplicate name ${JSON.stringify(entry.name)}`, entry.span);
+          return binding;
+        }
+        return this.bind(binding);
+      }),
+    }));
   }
 
   /** Looks up a name and records a reference when found. A missing (empty) name finds nothing. */

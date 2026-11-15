@@ -62,6 +62,12 @@ export type Binding<T = unknown> = {
   readonly type?: T;
   readonly uri?: string;
   readonly detail?: string;
+  /**
+   * How an importing module's emitted runtime sees this binding when it is exported. Undefined: a
+   * runtime export of the same name. A string: a runtime export under that name. `false`: no runtime
+   * value (a type, a model), so emitters must not import it.
+   */
+  readonly runtime?: string | false;
 };
 
 export type Definition<T = unknown> = Binding<T>;
