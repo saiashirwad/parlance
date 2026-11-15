@@ -140,12 +140,20 @@ export type ListenOptions = Pick<ModuleGraphOptions, "resolve"> & {
   readonly onSnippetsSaved?: (uri: string) => void;
 };
 
+/** What `listen` hands back to the host that started it. */
+export type Listening = {
+  /** The graph behind every answer. It reads open documents first, then the host. */
+  readonly graph: ModuleGraph;
+  /** Host files changed outside the editor: drop them and re-check the open documents that import them. */
+  readonly changed: (uris: readonly string[]) => void;
+};
+
 /**
  * The language server over any connection: stdio in Node (`server.ts`), a worker's message
  * port in a browser (`browser.ts`). Open documents come from the client; every other file
  * comes from the host. Starts listening before it returns.
  */
-export const listen = (connection: Connection, languages: readonly AnyLanguage[], options: ListenOptions): void => {
+export const listen = (connection: Connection, languages: readonly AnyLanguage[], options: ListenOptions): Listening => {
   const { host, onSnippetsSaved, ...graphOptions } = options;
   const registry = extensionMap(languages);
   const documents = new TextDocuments(TextDocument);
@@ -318,7 +326,7 @@ export const listen = (connection: Connection, languages: readonly AnyLanguage[]
   const analysisFor = (uri: string): ReturnType<typeof analyze> | undefined => analyses.get(uri);
 
   /** Refresh open documents whose graph node was invalidated by another edit. */
-  const refreshOpenDependents = (changed: string): void => {
+  const refreshOpenDependents = (changed?: string): void => {
     for (let pass = 0; pass <= documents.all().length; pass++) {
       let updated = false;
       for (const document of documents.all()) {
@@ -688,4 +696,11 @@ export const listen = (connection: Connection, languages: readonly AnyLanguage[]
 
   documents.listen(connection);
   connection.listen();
+  return {
+    graph,
+    changed: (uris) => {
+      for (const uri of uris) if (!documents.get(uri)) graph.forget(uri);
+      refreshOpenDependents();
+    },
+  };
 };

@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { build, type Metafile, type Plugin } from "esbuild";
@@ -68,7 +68,13 @@ const client = (worker: Worker) => {
     }
   });
   const notify = (method: string, params: unknown) => worker.postMessage({ jsonrpc: "2.0", method, params });
+  /** The next diagnostics published for `uri`. */
+  const nextDiagnostics = (uri: string) =>
+    new Promise<{ message: string; severity: number }[]>((resolve) => {
+      published.set(uri, [...(published.get(uri) ?? []), resolve]);
+    });
   return {
+    next: nextDiagnostics,
     request: (method: string, params: unknown) =>
       new Promise<any>((resolve) => {
         const id = ++next;
@@ -93,12 +99,8 @@ const at = (text: string, needle: string, skip = 0) => {
   return { line: before.length - 1, character: before.at(-1)!.length };
 };
 
-test("the bundled worker serves calc and shade over messages, reading imports from memory", async (t) => {
-  const entry = [
-    'import config from "./parlance.config.ts";',
-    'import { serveWorker } from "./src/lsp/browser.ts";',
-    `serveWorker(config.languages, { files: { "file:///play/lib.calc": ${JSON.stringify("let base = 85 + 40;\n")} } });`,
-  ].join("\n");
+/** Bundles a worker entry and runs it in a Node worker behind a worker-scope shim. */
+const boot = async (t: TestContext, entry: string) => {
   const { text } = await bundle("worker-test.ts", entry);
   const directory = mkdtempSync(join(tmpdir(), "parlance-browser-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
@@ -115,6 +117,16 @@ test("the bundled worker serves calc and shade over messages, reading imports fr
   const worker = new Worker(join(directory, "scope.mjs"));
   t.after(() => worker.terminate());
   const lsp = client(worker);
+  return lsp;
+};
+
+test("the bundled worker serves calc and shade over messages, reading imports from memory", async (t) => {
+  const entry = [
+    'import config from "./parlance.config.ts";',
+    'import { serveWorker } from "./src/lsp/browser.ts";',
+    `serveWorker(config.languages, { files: { "file:///play/lib.calc": ${JSON.stringify("let base = 85 + 40;\n")} } });`,
+  ].join("\n");
+  const lsp = await boot(t, entry);
 
   const init = await lsp.request("initialize", { processId: null, rootUri: null, capabilities: {} });
   assert.equal(init.capabilities.hoverProvider, true);
@@ -149,4 +161,35 @@ test("the bundled worker serves calc and shade over messages, reading imports fr
   const wrong = particles.replace("return clamp(1.0 - age / params.lifetime, 0.0, 1.0);", "return 1u;");
   const errors = await lsp.open("file:///play/wrong.gpu", "shade", wrong);
   assert.ok(errors.length > 0 && errors.every((entry) => entry.severity === 1), JSON.stringify(errors));
+});
+
+test("the worker takes in-memory files and emits a document's projections", async (t) => {
+  const entry = [
+    'import config from "./parlance.config.ts";',
+    'import { serveWorker } from "./src/lsp/browser.ts";',
+    `serveWorker(config.languages, { files: { "file:///play/lib.calc": ${JSON.stringify("let base = 85 + 40;\n")} } });`,
+  ].join("\n");
+  const lsp = await boot(t, entry);
+  await lsp.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+  lsp.notify("initialized", {});
+
+  const main = 'use "./lib.calc";\nlet total = base * 2;\nshow total;\n';
+  assert.deepEqual(await lsp.open("file:///play/main.calc", "calc", main), []);
+  const emitted = await lsp.request("parlance/emit", { uri: "file:///play/main.calc" });
+  assert.deepEqual(emitted.errors, []);
+  assert.deepEqual(emitted.modules.map((module: { uri: string }) => module.uri), ["file:///play/lib.calc", "file:///play/main.calc"]);
+  assert.match(emitted.modules[1].code, /from "\.\/lib\.calc"/);
+  assert.match(emitted.typescript, /total/);
+
+  // A changed import re-checks the open importer.
+  const rechecked = lsp.next("file:///play/main.calc");
+  lsp.notify("parlance/files", { files: { "/play/lib.calc": "let base = true;\n" } });
+  assert.ok((await rechecked).some((entry) => /number/.test(entry.message)));
+  const failed = await lsp.request("parlance/emit", { uri: "file:///play/main.calc" });
+  assert.ok(failed.errors.length > 0 && failed.modules.length === 0);
+
+  const particles = readFileSync(join(root, "examples/shade/particles.gpu"), "utf8");
+  await lsp.open("file:///play/particles.gpu", "shade", particles);
+  const shade = await lsp.request("parlance/emit", { uri: "file:///play/particles.gpu" });
+  assert.match(shade.targets.wgsl, /@compute @workgroup_size\(64, 1, 1\)/);
 });
