@@ -53,7 +53,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 });
 ```
 
-`grammar` is a `CompiledGrammar<File>` compiled from `examples/calc/calc.parl`. `check` turns the AST into `CalcModule`. `types` returns a `TsDoc`; `runtime` returns an ES module source string. Only `name`, `extensions`, `grammar`, and `check` are required. `typescript`, `runtime`, `targets`, `show`, `describe`, and `checkPartial` are optional. [`docs/04-authoring.md`](docs/04-authoring.md) builds each piece in order.
+`grammar` is a `CompiledGrammar<File>` compiled from `examples/calc/calc.parl`. `check` turns the AST into `CalcModule`. `types` returns a `TsDoc`; `runtime` returns an ES module source string. Only `name`, `extensions`, `grammar`, and `check` are required. `typescript`, `runtime`, `targets`, `show`, `describe`, `embed`, and `checkPartial` are optional. [`docs/04-authoring.md`](docs/04-authoring.md) builds each piece in order.
 
 ## Examples
 
@@ -72,6 +72,7 @@ export const calc = defineLanguage<File, CalcModule, Type>({
 - [`docs/05-modules.md`](docs/05-modules.md): imports, the module graph, diagnostic routing, and cross-file navigation.
 - [`docs/06-neovim.md`](docs/06-neovim.md): project-local LSP wiring, keymaps, verification, and troubleshooting.
 - [`docs/07-comparison.md`](docs/07-comparison.md): common-grammar parser throughput against the old langkit checkout.
+- [`docs/08-embedding.md`](docs/08-embedding.md): keyed guest snippets inside `.ts` files, typed, run, and served in the editor.
 
 ## Status
 
@@ -84,6 +85,7 @@ Working:
 - Cross-file imports through one `ModuleGraph`: schema, calc, machine, and advanced resolve dependencies, and the CLI, Node loader, content mapper, and LSP all use the graph. Imports can also name TypeScript files and packages (bare specifiers, a `resolve` hook in `parlance.config.ts`): calc's `from "./rates.ts" use taxRate;` is checked by tsgo through the generated surface, with errors at the guest span.
 - Source-mapped TypeScript surfaces through a `ts` template and the TypeScript 7.1 content mapper.
 - A Node loader that runs guest files without a build step. A `runtime` that returns a `TsDoc` gets an inline source map, so stack traces show guest positions under `--enable-source-maps`.
+- Snippets inside real `.ts` files: `schema("Blog")` followed by a template is typed through a `.embeds` stub the content mapper owns, runs under the Node loader, and gets diagnostics, hover, definition, completion, and tokens from the parlance LSP in TypeScript buffers. Holes are not supported yet.
 - Named targets with `parlance emit`.
 - Incremental reparse when the root is an item repetition: a one-character edit in the 2.8 MB calc corpus runs in about 20 ms, or 16% of a full parse, with 99,998 of 100,000 items reused. On a 50 KB file an edit plus analyze takes about 1.6 ms. The LSP uses it; the checker still runs over the whole file.
 - The advanced, calc, schema, and machine examples, exercised by `pnpm check`.
