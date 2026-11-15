@@ -1,15 +1,23 @@
-import { posix } from "node:path";
 import { source, synth, ts, type TsDoc } from "../../src/ts/index.ts";
 import type { AdvancedModule, ConstructorInfo, DataInfo } from "./check.ts";
 import { prune, type Type } from "./type.ts";
 import { namer, nullaryConstructorText, printer, reserved } from "./type-printer.ts";
+
+/** `to` relative to the directory of `from`, both URL pathnames. */
+const relativePath = (from: string, to: string): string => {
+  const base = from.split("/").filter(Boolean).slice(0, -1);
+  const target = to.split("/").filter(Boolean);
+  let shared = 0;
+  while (shared < base.length && shared < target.length && base[shared] === target[shared]) shared++;
+  return [...base.slice(shared).map(() => ".."), ...target.slice(shared)].join("/");
+};
 
 const relativeSpecifier = (from: string, to: string): string => {
   try {
     const fromUrl = new URL(from);
     const toUrl = new URL(to);
     if (fromUrl.protocol !== "file:" || toUrl.protocol !== "file:") return to;
-    const path = posix.relative(posix.dirname(fromUrl.pathname), toUrl.pathname);
+    const path = relativePath(fromUrl.pathname, toUrl.pathname);
     return path.startsWith(".") ? path : `./${path}`;
   } catch {
     return to;

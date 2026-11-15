@@ -122,6 +122,7 @@ const steps: readonly Step[] = [
     command: ["node", "--import", "./examples/register.ts", "examples/embed/kernel.ts"],
     expect: ["12 24 36 48 2 64"],
   },
+  { name: "typecheck the playground site", command: ["pnpm", "exec", "tsc", "-p", "site/tsconfig.json"] },
   { name: "drive the real LSP over an edit", command: ["node", "tools/lsp-smoke.ts"], expect: ["ok lsp edit scenario"] },
   { name: "tsgo navigates into guest files", command: ["node", "--test", "tests/tsgo.test.ts"] },
   { name: "benchmark smoke", command: ["node", "tools/bench.ts"], expect: ["calc 100000 decls"], bench: true },

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { bind, type Binding, type Checker } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
@@ -7,8 +6,8 @@ import { runtimeModule } from "../../src/runtime/index.ts";
 import type { Span, Text } from "../../src/source.ts";
 import { source, synth, ts } from "../../src/ts/index.ts";
 import type { EventEventNode, Field, File, StateDecl } from "./machine.ast.ts";
+import sourceText from "./machine.parl.ts";
 
-const sourceText = readFileSync(new URL("./machine.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "machine.parl");
 if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message).join("\n"));
 const grammar = compileGrammar<File>(parsed.file, "machine.parl");

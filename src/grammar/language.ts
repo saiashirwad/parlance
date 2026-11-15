@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { type Binding, type Checker } from "../check/index.ts";
 import { defineLanguage } from "../language.ts";
 import type { Text } from "../source.ts";
@@ -12,6 +11,7 @@ import type {
 } from "./ast.ts";
 import { compileGrammar } from "./compile.ts";
 import { parseGrammar } from "./parse.ts";
+import sourceText from "./grammar.parl.ts";
 
 export type GrammarType =
   | { readonly kind: "grammar"; readonly name: string }
@@ -30,7 +30,6 @@ export type GrammarModule = {
   readonly tokens: number;
 };
 
-const sourceText = readFileSync(new URL("./grammar.parl", import.meta.url), "utf8");
 const bootstrap = parseGrammar(sourceText, "src/grammar/grammar.parl");
 if (!bootstrap.ok) {
   throw new Error(bootstrap.diagnostics.map((entry) => entry.message).join("\n"));

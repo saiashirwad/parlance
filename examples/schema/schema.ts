@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { type Binding, type Checker, isError } from "../../src/check/index.ts";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
@@ -26,8 +25,8 @@ import type {
   Update,
   Value,
 } from "./schema.ast.ts";
+import sourceText from "./schema.parl.ts";
 
-const sourceText = readFileSync(new URL("./schema.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "schema.parl");
 if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message).join("\n"));
 const grammar = compileGrammar<File>(parsed.file, "schema.parl");

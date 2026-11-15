@@ -1,4 +1,5 @@
-// A particle system stepped by one compute pass: gravity, drag, a floor bounce, and fading color.
+// A particle system stepped by one compute pass: gravity, drag,
+// a floor bounce, and fading color.
 
 struct Particle {
   position: vec3f,

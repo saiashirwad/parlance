@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { compileGrammar } from "../../src/grammar/compile.ts";
 import { parseGrammar } from "../../src/grammar/parse.ts";
 import { defineLanguage, importSpecifier } from "../../src/language.ts";
@@ -7,8 +6,8 @@ import { type AdvancedModule, check, describeBinding } from "./check.ts";
 import { runtime } from "./emit.ts";
 import { show, type Type } from "./type.ts";
 import { typescript } from "./typescript.ts";
+import sourceText from "./advanced.parl.ts";
 
-const sourceText = readFileSync(new URL("./advanced.parl", import.meta.url), "utf8");
 const parsed = parseGrammar(sourceText, "advanced.parl");
 if (!parsed.ok) throw new Error(parsed.diagnostics.map((entry) => entry.message).join("\n"));
 const grammar = compileGrammar<File>(parsed.file, "advanced.parl");

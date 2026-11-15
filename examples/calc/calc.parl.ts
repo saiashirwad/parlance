@@ -1,0 +1,59 @@
+// Generated from calc.parl by `parlance source`. Do not edit.
+export default `grammar Calc
+
+skip /\\s+/
+skip /\\/\\/[^\\n]*/
+
+word /[A-Za-z_][A-Za-z0-9_]*/
+
+token Number /\\d+(?:\\.\\d+)?/
+token String /"([^"\\\\\\n]|\\\\.)*"/
+
+root File
+
+rule File = {
+  @file declarations:Decl*
+};
+
+rule Decl = {
+  | Import
+  | TsImport
+  | @let "let" ~ name:Name "=" ~ value:Expr ";"
+  | @show "show" ~ value:Expr ";"
+};
+
+rule TsImport = {
+  @tsimport "from" specifier:$String "use" names:sep(Name, ",") ";"
+};
+
+rule Import = {
+  @import "use" specifier:$String ";"
+};
+
+rule Expr = precedence {
+  left "==" | "!="
+  left "+" | "-"
+  left "*" | "/"
+  prefix "-" | "!"
+  atom
+    | @number value:$Number
+    | @boolean value:BooleanLit
+    | @name value:Name
+    | "(" value:Expr ")"
+};
+
+rule BooleanLit = {
+  | value:"true"
+  | value:"false"
+};
+
+rule Name = {
+  word
+};
+
+bind {
+  import import.specifier
+  export def let.name: variable after
+  ref name.value: variable "name"
+}
+`;

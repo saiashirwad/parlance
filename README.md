@@ -2,6 +2,10 @@
 
 Parlance is a toolkit for small languages that live inside TypeScript and Node. A language is one value: a grammar, a checker, a TypeScript surface, a runtime, and optional targets. The grammar is a `.parl` file that also supplies the lexer for highlighting. The same value drives the content mapper, the Node loader, and the language server, so a project writes one definition and gets every host from it.
 
+## Playground
+
+Try it in the browser: [https://parlance.texoport.in](https://parlance.texoport.in). It runs the language server and the TypeScript checker in workers, no backend. Locally: `pnpm site:dev`. Deploy: `pnpm site:deploy` (alchemy, Cloudflare).
+
 ## Requirements
 
 - Node.js 24.2 or newer (`engines` in `package.json`).

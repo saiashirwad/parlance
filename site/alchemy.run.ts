@@ -1,0 +1,25 @@
+import * as Alchemy from "alchemy";
+import * as Cloudflare from "@alchemy.run/cloudflare";
+import * as Effect from "effect/Effect";
+
+// The playground is a static Astro build served as Cloudflare Worker assets.
+// Cloudflare allows 25 MiB per asset; the largest file (typescript.js) is ~9 MB.
+export default Alchemy.Stack(
+  "parlance-playground",
+  {
+    providers: Cloudflare.providers(),
+    state: Cloudflare.state(),
+  },
+  Effect.gen(function* () {
+    const site = yield* Cloudflare.Website.StaticSite("Playground", {
+      command: "pnpm build",
+      outdir: "dist",
+      domain: "parlance.texoport.in",
+      workersDev: true,
+      // Deep links (`/calc/demo.calc#L3`) and files a visitor made have no page of their own;
+      // every unknown path serves the playground, which reads the path itself.
+      assets: { notFoundHandling: "single-page-application" },
+    });
+    return { url: site.url, urls: site.urls };
+  }),
+);

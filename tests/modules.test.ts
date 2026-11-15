@@ -7,6 +7,8 @@ import test from "node:test";
 import { calc, type CalcModule } from "../examples/calc/calc.ts";
 import { schema, type SchemaModule } from "../examples/schema/schema.ts";
 import { loadProject } from "../src/config.ts";
+import { ModuleGraph as CoreGraph } from "../src/graph.ts";
+import { memoryHost } from "../src/host-env.ts";
 import { defaultResolve, ModuleGraph } from "../src/modules.ts";
 import { definitionAt } from "../src/check/index.ts";
 import type { AnyLanguage } from "../src/language.ts";
@@ -402,4 +404,18 @@ test("a language can re-export imported bindings and keep their defining documen
   assert.equal(reexported.uri, "memory://dir/c.calc");
   const at = files["memory://dir/a.calc"].indexOf("x + y");
   assert.equal(definitionAt(analysis.facts, at)?.uri, "memory://dir/c.calc");
+});
+
+test("the core graph reads, resolves, and checks existence through an in-memory host", () => {
+  const host = memoryHost({
+    "/play/main.calc": 'use "./lib.calc";\nfrom "./rates.ts" use taxRate;\nshow base * taxRate;\n',
+    "/play/lib.calc": "let base = 85 + 40;\n",
+    "/play/rates.ts": "export const taxRate = 0.2;\n",
+  });
+  const graph = new CoreGraph({ languages: [calc], host });
+  assert.deepEqual(graph.analyze("/play/main.calc").diagnostics, []);
+  assert.deepEqual(graph.order(), ["file:///play/lib.calc", "file:///play/main.calc"]);
+  host.files.set("file:///play/lib.calc", "let other = 1;\n");
+  const messages = graph.analyze("/play/main.calc").diagnostics.map((entry) => entry.message);
+  assert.ok(messages.some((message) => /base/.test(message)), messages.join("\n"));
 });

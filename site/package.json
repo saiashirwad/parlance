@@ -1,0 +1,37 @@
+{
+  "name": "@parlance/site",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "test": "playwright test",
+    "deploy": "alchemy deploy --stage prod --yes"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/lang-sql": "^6.10.0",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.8",
+    "@codemirror/lsp-client": "^6.3.0",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.15",
+    "@lezer/highlight": "^1.2.5",
+    "astro": "^7.4.12",
+    "codemirror": "^6.0.2",
+    "typescript": "6.0.3",
+    "vscode-languageserver-protocol": "^3.18.5"
+  },
+  "devDependencies": {
+    "@alchemy.run/cloudflare": "2.0.0-beta.87",
+    "@effect/platform-node": "^4.1.4",
+    "@playwright/test": "^1.65.1",
+    "@webgpu/types": "^0.1.74",
+    "alchemy": "2.0.0-beta.87",
+    "effect": "^4.1.4"
+  }
+}

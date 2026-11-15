@@ -97,6 +97,19 @@ Generate the TypeScript module for the values that your parser returns:
 node src/grammar/cli.ts gen examples/calc/calc.parl examples/calc/calc.ast.ts
 ```
 
+The language compiles its grammar from the `.parl` text. Write that text as a module too, so the language loads without a filesystem (in a browser worker, say):
+
+```sh
+node src/grammar/cli.ts source examples/calc/calc.parl examples/calc/calc.parl.ts
+```
+
+```ts
+import sourceText from "./calc.parl.ts";
+const parsed = parseGrammar(sourceText, "calc.parl");
+```
+
+`tools/grammar-check.ts` fails when either generated file no longer matches its grammar.
+
 The generated module starts with the helper types and one interface per tagged alternative:
 
 ```ts

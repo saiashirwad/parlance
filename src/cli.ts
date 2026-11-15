@@ -5,6 +5,7 @@ import { discoverConfig, loadProject, type ProjectConfig } from "./config.ts";
 import { type Diagnostic, render } from "./diagnostic.ts";
 import { compileGrammar } from "./grammar/compile.ts";
 import { parseGrammar } from "./grammar/parse.ts";
+import { grammarSourceModule } from "./grammar/source.ts";
 import { generateTypes } from "./grammar/types.ts";
 import { extensionMap, type AnyLanguage } from "./language.ts";
 import { ModuleGraph } from "./modules.ts";
@@ -13,7 +14,8 @@ const usage = `usage:
   parlance check <file...> [--config <path>]
   parlance emit --target <name> <file> [--out <path>] [--config <path>]
   parlance lsp [--config <path>]
-  parlance gen <grammar.parl> <out.ts>`;
+  parlance gen <grammar.parl> <out.ts>
+  parlance source <grammar.parl> <out.ts>`;
 
 const fail = (message: string): never => {
   process.stderr.write(`${message}\n`);
@@ -128,6 +130,19 @@ const gen = (args: readonly string[]): number => {
   return 0;
 };
 
+/** Writes the grammar text as a module, so the language loads without reading the file. */
+const sourceModule = (args: readonly string[]): number => {
+  const [grammar, output] = args;
+  if (!grammar || !output) fail(usage);
+  const source = readFileSync(resolve(grammar!), "utf8");
+  const parsed = parseGrammar(source, grammar);
+  if (!parsed.ok) return print(grammar!, source, parsed.diagnostics);
+  const text = grammarSourceModule(source, grammar!.slice(grammar!.lastIndexOf("/") + 1));
+  writeFileSync(resolve(output!), text);
+  process.stdout.write(`wrote ${output} (${Buffer.byteLength(text, "utf8")} bytes)\n`);
+  return 0;
+};
+
 const main = async (): Promise<number> => {
   const [command, ...args] = process.argv.slice(2);
   switch (command) {
@@ -139,6 +154,8 @@ const main = async (): Promise<number> => {
       return lsp(args);
     case "gen":
       return gen(args);
+    case "source":
+      return sourceModule(args);
     default:
       process.stderr.write(`${usage}\n`);
       return 1;

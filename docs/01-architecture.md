@@ -357,6 +357,17 @@ One package, `@parlance/ts-host`, for every project:
 - semantic tokens: full, delta, and range, with `declaration` and `readonly` modifiers
 - cross-file definition, references, and rename through the module graph
 
+### Browser
+
+The core never imports `node:*`. What it needs from its surroundings is a `HostEnv` (`src/host-env.ts`): `readFile(uri)`, `exists(uri)`, and optionally `resolve(specifier, from)`. Node passes `nodeHost` (`src/host-node.ts`: the filesystem and package resolution); `memoryHost(files)` serves a `Map` of files for a browser or a test.
+
+- `src/graph.ts` is the module graph over a host. `ModuleGraph` from `modules.ts` is the same graph with `nodeHost` as the default.
+- `src/lsp/core.ts` is the server over any `Connection`. `server.ts` connects it to stdio and the disk; `browser.ts` (`serveWorker(languages, { files })`) connects it to a Web Worker's message port and an in-memory host. Open documents come from `didOpen`; their imports come from the host.
+- Languages import their grammar text from a generated `<name>.parl.ts` (`parlance source`) instead of reading the `.parl` file. `tools/grammar-check.ts` fails when one is stale.
+- Runtimes that need Node (schema's `node:sqlite`) are only named by URL in the emitted module, so analyzing or emitting never loads them.
+
+`examples/worker.ts` is the worker for every example language. `tests/browser.test.ts` bundles it with esbuild for the browser, failing on any Node built-in, then runs a bundle behind a worker-scope shim and drives it over messages. The Node-only pieces stay Node-only: the content mapper, the loader, `config.ts`, and the tsgo stamp files the server touches on save.
+
 Features are derived. A language that wants a custom hover adds `describe(binding)`. It does not write a server. Definition crosses documents through the module graph (`docs/05-modules.md`). Scope-aware completion works for any checker: `bind` blocks record visibility extents, and `cx.scope(extent?, body)` plus `cx.bind` record them for hand-written checkers. Pass the node's span to `cx.scope` when you have it; otherwise the extent is inferred from the facts recorded inside. Names bound in the file scope are visible in the whole file. Not yet promised: incremental rename, formatting, signature help.
 
 ## Package layout
@@ -366,12 +377,16 @@ src/
   source.ts        Source, Span, Text, edits
   diagnostic.ts    Diagnostic, render, routing
   language.ts      Language, defineLanguage, analyze, analyzeParsed
-  modules.ts       ModuleGraph, import resolution, cycle detection
+  host-env.ts      HostEnv, memoryHost: what the core reads files through
+  host-node.ts     nodeHost: filesystem and package resolution
+  graph.ts         module graph over a host: resolution, cycle detection, caching
+  modules.ts       ModuleGraph over the filesystem
   grammar/
     ast.ts         grammar AST
     parse.ts       bootstrap parser for .parl
     compile.ts     lexer/parser compiler, static checks
     types.ts       AST type generation
+    source.ts      .parl text as a module (`<name>.parl.ts`)
     language.ts    .parl as a Language: LSP diagnostics, symbols, navigation, tokens
     grammar.parl   the grammar language in itself
   parser/
@@ -387,10 +402,14 @@ src/
   ts/
     template.ts    mapped ts`` builder
     type.ts        TS type printer
+    snippets.ts    embedded snippets: find, map, analyze
+    embed.ts       snippet registries and stamps on disk
     host.ts        content mapper server
     loader.ts      Node loader
   lsp/
-    server.ts      generic LSP
+    core.ts        generic LSP over any connection
+    server.ts      stdio entry (CLI, Neovim)
+    browser.ts     Web Worker entry
   runtime/
     index.ts       interpreted-module helper
 ```
