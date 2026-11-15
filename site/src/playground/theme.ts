@@ -8,21 +8,23 @@ import { EditorView } from "@codemirror/view";
 import { tags as t } from "@lezer/highlight";
 
 export const editorTheme = EditorView.theme({
-  "&": { height: "100%", color: "var(--fg)", backgroundColor: "var(--bg)", fontSize: "13.5px" },
-  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.65" },
-  ".cm-content": { padding: "14px 0", caretColor: "var(--accent)" },
-  ".cm-line": { padding: "0 18px 0 6px" },
+  "&": { height: "100%", color: "var(--fg)", backgroundColor: "var(--bg)", fontSize: "13px" },
+  ".cm-scroller": { fontFamily: "var(--mono)", lineHeight: "1.6", fontVariantLigatures: "none" },
+  ".cm-content": { padding: "12px 0", caretColor: "var(--accent)" },
+  ".cm-line": { padding: "0 16px 0 4px" },
   "&.cm-focused": { outline: "none" },
   ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent)", borderLeftWidth: "2px" },
   "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection": {
     backgroundColor: "var(--selection) !important",
   },
-  ".cm-activeLine": { backgroundColor: "var(--active-line)" },
-  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--faint)", border: "none" },
-  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--muted)" },
-  ".cm-lineNumbers .cm-gutterElement": { padding: "0 6px 0 14px", minWidth: "36px" },
+  ".cm-activeLine": { backgroundColor: "transparent" },
+  ".cm-gutters": { backgroundColor: "var(--bg)", color: "var(--gutter)", border: "none" },
+  ".cm-activeLineGutter": { backgroundColor: "transparent", color: "var(--faint)" },
+  ".cm-lineNumbers .cm-gutterElement": { padding: "0 4px 0 12px", minWidth: "32px", fontSize: "12px" },
   ".cm-foldGutter": { display: "none" },
-  ".cm-lint-marker": { width: "0.8em", height: "0.8em" },
+  ".cm-gutter-lint": { width: "14px" },
+  ".cm-gutter-lint .cm-gutterElement": { padding: "0 0 0 2px" },
+  ".cm-lint-marker": { width: "8px", height: "8px" },
   ".cm-matchingBracket, &.cm-focused .cm-matchingBracket": { backgroundColor: "var(--selection)", color: "inherit" },
   ".cm-selectionMatch": { backgroundColor: "var(--match)" },
   ".cm-tooltip": {
@@ -56,14 +58,7 @@ export const editorTheme = EditorView.theme({
   },
   ".cm-lintRange-error": { backgroundImage: "none", textDecoration: "underline wavy var(--error)", textUnderlineOffset: "3px" },
   ".cm-lintRange-warning": { backgroundImage: "none", textDecoration: "underline wavy var(--warning)", textUnderlineOffset: "3px" },
-  ".cm-inlay-hint": {
-    color: "var(--muted)",
-    backgroundColor: "var(--hint-bg)",
-    borderRadius: "4px",
-    padding: "0 4px",
-    margin: "0 2px",
-    fontSize: "0.85em",
-  },
+  ".cm-inlay-hint": { color: "var(--faint)", fontSize: "0.92em", margin: "0 1px" },
   ".cm-panels": { backgroundColor: "var(--panel)", color: "var(--fg)", borderColor: "var(--border)" },
   ".cm-dialog input, .cm-textfield": {
     font: "inherit",

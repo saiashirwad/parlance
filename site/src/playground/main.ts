@@ -22,12 +22,12 @@ import { editorTheme, highlight } from "./theme.ts";
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const languageSelect = $<HTMLSelectElement>("language");
 const runButton = $<HTMLButtonElement>("run");
-const gpuButton = $<HTMLButtonElement>("run-gpu");
 const statusLine = $("status");
 const fileTabs = $("files");
 const editors = $("editors");
 const consoleView = $("console");
 const targetSelect = $<HTMLSelectElement>("target");
+const targetPicker = targetSelect.parentElement!;
 const problemList = $("problems");
 const problemCount = $("problem-count");
 
@@ -45,6 +45,7 @@ let emitted: { uri: string; result: EmitResult } | null = null;
 /** Each guest file's last TypeScript surface, for mapping TypeScript definitions back. */
 const surfaces = new Map<string, TsDoc>();
 
+/** Shown while the language server starts and when something fails; hidden once ready. */
 const setStatus = (state: "starting" | "ready" | "error", text: string) => {
   statusLine.dataset.state = state;
   statusLine.textContent = text;
@@ -142,7 +143,7 @@ const setText = (view: EditorView, text: string, language: Extension = []) => {
   view.setState(EditorState.create({ doc: text, extensions: readOnly([language]) }));
 };
 
-const runKeys = keymap.of([{ key: "Mod-Enter", run: () => (void run("cpu"), true) }]);
+const runKeys = keymap.of([{ key: "Mod-Enter", run: () => (void run(), true) }]);
 
 const editorFor = (name: string, text: string): EditorView => {
   const uri = uriOf(example, name);
@@ -189,9 +190,8 @@ const load = async (next: Example) => {
   emitted = null;
   example = next;
   languageSelect.value = next.id;
-  gpuButton.hidden = !(next.gpu && "gpu" in navigator);
   surfaces.clear();
-  runButton.disabled = next.run === "none";
+  runButton.hidden = next.run === "none";
   const files = texts.get(next.id)!;
   // Every file is in memory before any opens, so the first analysis already resolves imports.
   client.notification("parlance/files", {
@@ -210,7 +210,7 @@ const load = async (next: Example) => {
   select(next.files[0]!.name);
   renderProblems();
   consoleView.replaceChildren();
-  void run("cpu");
+  void run();
 };
 
 // ---- problems --------------------------------------------------------------------------------
@@ -290,15 +290,14 @@ const refreshOutputs = async () => {
   }
   if (uri !== uriOf(example, guestFile())) return;
   emitted = { uri, result };
-  $("emit-for").textContent = name;
-  $("ts-for").textContent = `${name}, as TypeScript sees it`;
   const failed = result.errors.length > 0 ? `// ${name} has errors; fix them to see output.\n${result.errors.map((error) => `// ${error}`).join("\n")}\n` : null;
   const own = result.modules.find((module) => module.uri === uri)?.code;
   const targets = [...(own ? ["js"] : []), ...Object.keys(result.targets)];
   const chosen = targets.includes(targetSelect.value) ? targetSelect.value : targets.at(-1) ?? "js";
   targetSelect.replaceChildren(...targets.map((target) => new Option(target === "js" ? "JavaScript" : target, target)));
   targetSelect.value = chosen;
-  targetSelect.disabled = targets.length < 2;
+  targetSelect.dataset.choices = String(targets.length);
+  showTarget();
   renderEmit(failed);
   setText(tsView, result.typescript?.text ?? failed ?? `// ${example.label} has no TypeScript surface.\n`, javascript({ typescript: true }));
 };
@@ -325,7 +324,10 @@ const print = (text: string, className = "line") => {
 
 let running: Worker | null = null;
 
-const run = async (device: RunRequest["device"], driver?: string) => {
+/** Shade kernels dispatch on WebGPU where the browser has it, and on the CPU otherwise. */
+const device: RunRequest["device"] = "gpu" in navigator ? "webgpu" : "cpu";
+
+const run = async () => {
   running?.terminate();
   running = null;
   showPanel("run");
@@ -335,7 +337,7 @@ const run = async (device: RunRequest["device"], driver?: string) => {
     return;
   }
   const guests = example.files.filter((file) => !isDriver(file.name)).map((file) => file.name);
-  const entryName = driver ?? (isDriver(active) ? active : example.entry);
+  const entryName = isDriver(active) ? active : example.entry;
   const results = await Promise.all((isDriver(entryName) ? guests : [entryName]).map(emit)).catch((cause) => {
     print(String(cause), "error");
     return null;
@@ -375,7 +377,6 @@ const run = async (device: RunRequest["device"], driver?: string) => {
       clearTimeout(timer);
       worker.terminate();
       if (consoleView.childElementCount === 0) print("(no output)", "note");
-      print(`${entryName} · ${device === "webgpu" ? "WebGPU" : "CPU"} · ${data.ms} ms`, "meta");
     }
   });
   worker.addEventListener("error", (event) => {
@@ -385,12 +386,20 @@ const run = async (device: RunRequest["device"], driver?: string) => {
   worker.postMessage({ modules: [...modules.values()], entry, device } satisfies RunRequest);
 };
 
-runButton.addEventListener("click", () => void run("cpu"));
-gpuButton.addEventListener("click", () => void run("webgpu", example.gpu));
+runButton.addEventListener("click", () => void run());
 
 // ---- output tabs, split, sharing -------------------------------------------------------------
 
-const showPanel = (panel: string) => {
+let panel = "run";
+
+/** The emit target picker, on the Emit tab when there is more than one target. */
+const showTarget = () => {
+  targetPicker.hidden = panel !== "emit" || Number(targetSelect.dataset.choices ?? 0) < 2;
+};
+
+const showPanel = (next: string) => {
+  panel = next;
+  showTarget();
   for (const tab of $("outputs").querySelectorAll<HTMLElement>(".tab")) {
     tab.setAttribute("aria-selected", String(tab.dataset.panel === panel));
   }
@@ -456,7 +465,7 @@ const fromHash = async (): Promise<Example> => {
 const start = async () => {
   const first = await fromHash();
   await client.initializing;
-  setStatus("ready", "language server ready");
+  setStatus("ready", "");
   await load(first);
   // A pasted link or the back button; our own updates use replaceState and do not land here.
   window.addEventListener("hashchange", () => void fromHash().then(load));

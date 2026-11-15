@@ -28,8 +28,6 @@ export type Example = {
   readonly files: readonly ExampleFile[];
   /** The file Run executes when the active tab is not runnable. */
   readonly entry: string;
-  /** The file "Run on WebGPU" executes. */
-  readonly gpu?: string;
   /** How Run behaves: run modules, show that it needs Node, or nothing to run. */
   readonly run: "module" | "node" | "none";
 };
@@ -62,8 +60,8 @@ const params = Params.pack({
   lifetime: 2,
 });
 
-// One step on WebGPU: the emitted WGSL and the same packed buffers,
-// read back in place.
+// One step on WebGPU where the browser has it (else the CPU): the
+// emitted WGSL and the same packed buffers, read back in place.
 await dispatch(kernel, "simulate", 1, { params, particles });
 console.log("ran on", device);
 
@@ -136,7 +134,6 @@ export const examples: readonly Example[] = [
       { name: "webgpu.ts", text: shadeGpu },
     ],
     entry: "shade.ts",
-    gpu: "webgpu.ts",
     run: "module",
   },
   {

@@ -37,7 +37,7 @@ const replace = async (page: Page, text: string) => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#status")).toHaveText("language server ready");
+  await expect(page.locator("#status")).toHaveAttribute("data-state", "ready");
 });
 
 test("calc runs, hovers, completes, and reports a broken edit", async ({ page }) => {
