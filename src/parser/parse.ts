@@ -120,8 +120,15 @@ class Machine {
   expected = new Set<KeyId>();
   depth = 0;
   speculative = 0;
+  /** One memo entry per rule: the token position, reply and diagnostics of its latest parse. */
+  readonly memoAt: Int32Array;
+  readonly memoReply: (Reply | undefined)[];
+  readonly memoDiagnostics: (Diagnostic[] | null)[];
 
   constructor(spec: GrammarSpec, tokens: TokenList, maxDepth: number) {
+    this.memoAt = new Int32Array(spec.rules.length).fill(-1);
+    this.memoReply = new Array(spec.rules.length);
+    this.memoDiagnostics = new Array(spec.rules.length).fill(null);
     this.spec = spec;
     this.tokens = tokens;
     this.maxDepth = maxDepth;
@@ -285,16 +292,36 @@ class Machine {
     }
   }
 
+  /**
+   * Alternatives that share a prefix ("Base | Postfix") reparse the same rule at
+   * the same token. Remembering the latest reply per rule makes that linear.
+   * Failures are only kept outside probes, which do not record what they expected.
+   */
   parseRule(rule: number, pos: number): Reply {
+    if (this.memoAt[rule] === pos) {
+      const diagnostics = this.memoDiagnostics[rule];
+      if (diagnostics) for (const entry of diagnostics) this.diagnostics.push(entry);
+      return this.memoReply[rule]!;
+    }
+    const mark = this.diagnostics.length;
     const expr = this.spec.rules[rule]!.expr;
+    let reply: Reply;
     switch (expr.t) {
       case "alt":
-        return this.parseAlt(expr, pos);
+        reply = this.parseAlt(expr, pos);
+        break;
       case "seq":
-        return this.parseSeq(expr, pos);
+        reply = this.parseSeq(expr, pos);
+        break;
       default:
-        return this.parseExpr(expr, pos);
+        reply = this.parseExpr(expr, pos);
     }
+    if (reply.ok || this.speculative === 0) {
+      this.memoAt[rule] = pos;
+      this.memoReply[rule] = reply;
+      this.memoDiagnostics[rule] = this.diagnostics.length > mark ? this.diagnostics.slice(mark) : null;
+    }
+    return reply;
   }
 
   parseSeq(expr: Extract<PExpr, { readonly t: "seq"; }>, pos: number): Reply {
