@@ -559,3 +559,25 @@ test("inlay hints show binding types unless annotated or opted out", async () =>
     client.close();
   }
 });
+
+test("workspace symbols search every analyzed document", async () => {
+  const { readFileSync } = await import("node:fs");
+  const machine = readFileSync(new URL("../examples/machine/order.machine", import.meta.url), "utf8");
+  const machineUri = pathToFileURL("/virtual/symbols.machine").href;
+  const client = new LspClient();
+  try {
+    await client.request("initialize", { processId: null, rootUri: null, capabilities: {} });
+    client.notify("initialized", {});
+    await client.open(machineUri, machine);
+    await client.open(uri, source);
+    const names = async (query: string) =>
+      (await client.request("workspace/symbol", { query })).result.map((symbol: Message) => [symbol.name, symbol.location.uri]);
+    assert.deepEqual(await names("chec"), [["Checkout", machineUri]]);
+    assert.deepEqual(await names("X"), [["x", uri]]);
+    const all = await names("");
+    assert.ok(all.some(([name, target]: string[]) => name === "Cart" && target === machineUri));
+    assert.ok(all.some(([name, target]: string[]) => name === "x" && target === uri));
+  } finally {
+    client.close();
+  }
+});

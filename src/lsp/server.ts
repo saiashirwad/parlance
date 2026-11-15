@@ -175,6 +175,7 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
       foldingRangeProvider: true,
       completionProvider: { triggerCharacters: ["@"] },
       inlayHintProvider: true,
+      workspaceSymbolProvider: true,
       renameProvider: true,
       semanticTokensProvider: {
         legend: { tokenTypes: [...tokenKinds], tokenModifiers: [] },
@@ -332,6 +333,29 @@ export const serve = (languages: readonly AnyLanguage[]): void => {
         location: { uri: document.uri, range: range(document, definition.span) },
         ...(definition.detail ? { containerName: definition.detail } : {}),
       }));
+  });
+
+  connection.onWorkspaceSymbol(({ query }) => {
+    const needle = query.toLowerCase();
+    const found: SymbolInformation[] = [];
+    for (const uri of graph.watched()) {
+      const node = graph.node(uri);
+      const target = node && documentAt(uri);
+      if (!node || !target) continue;
+      for (const definition of node.analysis.facts.definitions) {
+        if (definition.uri !== undefined && definition.uri !== uri) continue;
+        if (definition.kind === "parameter" || definition.kind === "typeParameter") continue;
+        if (needle && !definition.name.toLowerCase().includes(needle)) continue;
+        found.push({
+          name: definition.name,
+          kind: symbolKind(definition),
+          location: { uri, range: range(target, definition.span) },
+          ...(definition.detail ? { containerName: definition.detail } : {}),
+        });
+        if (found.length >= 200) return found;
+      }
+    }
+    return found;
   });
 
   connection.onFoldingRanges(({ textDocument }) => {
